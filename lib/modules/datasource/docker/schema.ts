@@ -202,6 +202,57 @@ export const DockerHubTagsPage = z.object({
 });
 
 /**
+ * Chainguard platform API resources are addressed by UIDP, a
+ * slash-separated path of opaque ids rooted at the group.
+ * https://edu.chainguard.dev/platform/api/spec-api-v1/
+ */
+const ChainguardResource = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+export const ChainguardGroupList = z.object({
+  items: LooseArray(ChainguardResource).catch([]),
+});
+
+export const ChainguardRepoList = ChainguardGroupList;
+
+export const ChainguardTagList = z.object({
+  items: LooseArray(
+    ChainguardResource.extend({
+      digest: z.string().nullable().catch(null),
+      lastUpdated: z.string().datetime().nullable().catch(null),
+    }),
+    {
+      /* v8 ignore next -- TODO: add test */
+      onError: ({ error }) => {
+        logger.debug(
+          { err: error },
+          'Chainguard: Failed to parse some tags from the platform API',
+        );
+      },
+    },
+  ).catch([]),
+});
+export type ChainguardTagList = z.infer<typeof ChainguardTagList>;
+
+/**
+ * One previous iteration of a mutable tag. Chainguard rebuilds a tag such as
+ * `3.14` on every package change, so the digest it points at now is usually
+ * newer than any `minimumReleaseAge` window; the history is what lets us
+ * resolve the digest it pointed at when the window opened.
+ */
+export const ChainguardTagHistory = z.object({
+  items: LooseArray(
+    z.object({
+      digest: z.string(),
+      updateTimestamp: z.string().datetime().nullable().catch(null),
+    }),
+  ).catch([]),
+});
+export type ChainguardTagHistory = z.infer<typeof ChainguardTagHistory>;
+
+/**
  * Docker registry auth token response.
  * https://distribution.github.io/distribution/spec/auth/token/
  */

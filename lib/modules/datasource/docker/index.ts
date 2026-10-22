@@ -9,6 +9,7 @@ import { getEnv } from '../../../util/env.ts';
 import { memCacheProvider } from '../../../util/http/cache/memory-http-cache-provider.ts';
 import { HttpError } from '../../../util/http/index.ts';
 import type { HttpResponse } from '../../../util/http/types.ts';
+import { calculateMinimumReleaseAgeMs } from '../../../util/minimum-release-age.ts';
 import { hasKey } from '../../../util/object.ts';
 import { type AsyncResult, Result } from '../../../util/result.ts';
 import { isDockerDigest } from '../../../util/string-match.ts';
@@ -32,6 +33,7 @@ import {
   isCrossOriginPaginationAllowed,
   resolvePaginationUrl,
 } from '../util.ts';
+import { CHAINGUARD_REGISTRY, getChainguardReleases } from './chainguard.ts';
 import {
   DOCKER_HUB,
   dockerDatasourceId,
@@ -99,7 +101,7 @@ export class DockerDatasource extends Datasource {
 
   override readonly releaseTimestampSupport = true;
   override readonly releaseTimestampNote =
-    'Only supported on Docker Hub: The release timestamp is determined from the `tag_last_pushed` field in the results. **NOTE**: Currently, digests will receive the same release timestamp as the `tag_last_pushed`, which means that digests may appear newer than they are - see https://github.com/renovatebot/renovate/issues/38659';
+    'Only supported on Docker Hub and Chainguard (`cgr.dev`). On Docker Hub the release timestamp is determined from the `tag_last_pushed` field in the results. **NOTE**: Currently, digests will receive the same release timestamp as the `tag_last_pushed`, which means that digests may appear newer than they are - see https://github.com/renovatebot/renovate/issues/38659. On `cgr.dev` it comes from the Chainguard platform API, and a `minimumReleaseAge` window rewinds each tag to the digest it pointed at when the window opened.';
   override readonly sourceUrlSupport = 'package';
   override readonly sourceUrlNote =
     'The source URL is determined from the `org.opencontainers.image.source` and `org.label-schema.vcs-url` labels present in the metadata of the **latest stable** image found on the Docker registry.';
@@ -1235,10 +1237,10 @@ export class DockerDatasource extends Datasource {
    *
    * This function will filter only tags that contain a semver version
    */
-  private async _getReleases({
-    packageName,
-    registryUrl,
-  }: GetReleasesConfig): Promise<ReleaseResult | null> {
+  private async _getReleases(
+    config: GetReleasesConfig,
+  ): Promise<ReleaseResult | null> {
+    const { packageName, registryUrl } = config;
     const { registryHost, dockerRepository } = getRegistryRepository(
       packageName,
       registryUrl!,
@@ -1246,7 +1248,7 @@ export class DockerDatasource extends Datasource {
 
     type TagsResultType = AsyncResult<
       Release[],
-      NonNullable<Error | 'tags-error' | 'dockerhub-error'>
+      NonNullable<Error | 'tags-error' | 'dockerhub-error' | 'chainguard-error'>
     >;
 
     const getTags = (): TagsResultType =>
@@ -1261,11 +1263,28 @@ export class DockerDatasource extends Datasource {
         'dockerhub-error' as const,
       ).catch(getTags);
 
-    const tagsResult =
+    const getChainguardTags = (): TagsResultType =>
+      Result.wrapNullable(
+        getChainguardReleases(this.http, dockerRepository, {
+          minimumReleaseAgeMs: calculateMinimumReleaseAgeMs(config),
+        }),
+        'chainguard-error' as const,
+      ).catch(getTags);
+
+    let tagsResult: TagsResultType;
+    if (
       registryHost === DOCKER_HUB &&
       !getEnv().RENOVATE_X_DOCKER_HUB_TAGS_DISABLE
-        ? getDockerHubTags()
-        : getTags();
+    ) {
+      tagsResult = getDockerHubTags();
+    } else if (
+      registryHost === CHAINGUARD_REGISTRY &&
+      !getEnv().RENOVATE_X_CHAINGUARD_TAGS_DISABLE
+    ) {
+      tagsResult = getChainguardTags();
+    } else {
+      tagsResult = getTags();
+    }
 
     const { val: releases, err } = await tagsResult.unwrap();
     if (err instanceof Error) {
@@ -1322,7 +1341,16 @@ export class DockerDatasource extends Datasource {
     return withCache(
       {
         namespace: 'datasource-docker-releases-v2',
-        key: buildCacheKey(registryHost, dockerRepository),
+        // `cgr.dev` releases are resolved against the `minimumReleaseAge`
+        // window, so two deps sharing a repository but not a window must not
+        // share a cache entry.
+        key: buildCacheKey(
+          registryHost,
+          dockerRepository,
+          registryHost === CHAINGUARD_REGISTRY
+            ? String(calculateMinimumReleaseAgeMs(config))
+            : undefined,
+        ),
         cacheable: registryHost === DOCKER_HUB,
         fallback: true,
       },

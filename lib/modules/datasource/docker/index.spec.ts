@@ -27,6 +27,7 @@ const authUrl = 'https://auth.docker.io';
 const gcrUrl = 'https://eu.gcr.io/v2';
 const garUrl = 'https://europe-docker.pkg.dev/v2';
 const dockerHubUrl = 'https://hub.docker.com/v2/repositories';
+const chainguardApiUrl = 'https://console-api.enforce.dev';
 const amazonHosts = [
   // partition: aws
   { host: '123456789.dkr.ecr.us-east-1.amazonaws.com', region: 'us-east-1' },
@@ -2655,6 +2656,131 @@ describe('modules/datasource/docker/index', () => {
           releaseTimestamp: '2021-01-01T00:00:00.000Z',
         },
       ]);
+    });
+
+    it('Uses the Chainguard platform API for cgr.dev', async () => {
+      httpMock
+        .scope(chainguardApiUrl)
+        .get('/iam/v1/groups?name=my-org')
+        .reply(200, { items: [{ id: 'aaaa', name: 'my-org' }] })
+        .get('/registry/v1/repos?uidp.childrenOf=aaaa&name=python')
+        .reply(200, { items: [{ id: 'aaaa/bbbb', name: 'python' }] })
+        .get(
+          '/registry/v1/tags?uidp.childrenOf=aaaa/bbbb&excludeReferrers=true',
+        )
+        .reply(200, {
+          items: [
+            {
+              id: 'aaaa/bbbb/1',
+              name: '3.13',
+              digest: 'sha256:aaa',
+              lastUpdated: '2026-06-10T20:18:06.420Z',
+            },
+            {
+              id: 'aaaa/bbbb/2',
+              name: '3.14',
+              digest: 'sha256:bbb',
+              lastUpdated: '2026-06-14T18:46:31.317Z',
+            },
+          ],
+        });
+      httpMock
+        .scope('https://cgr.dev')
+        .get('/v2/')
+        .reply(200, '', {})
+        .get('/v2/my-org/python/manifests/3.14')
+        .reply(200, '', {});
+
+      const res = await getPkgReleases({
+        datasource: DockerDatasource.id,
+        packageName: 'cgr.dev/my-org/python',
+      });
+
+      expect(res?.releases).toMatchObject([
+        { version: '3.13', releaseTimestamp: '2026-06-10T20:18:06.420Z' },
+        { version: '3.14', releaseTimestamp: '2026-06-14T18:46:31.317Z' },
+      ]);
+    });
+
+    it('Rewinds cgr.dev tags to satisfy minimumReleaseAge', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime('2026-06-20T00:00:00.000Z');
+
+      httpMock
+        .scope(chainguardApiUrl)
+        .get('/iam/v1/groups?name=my-org')
+        .reply(200, { items: [{ id: 'aaaa', name: 'my-org' }] })
+        .get('/registry/v1/repos?uidp.childrenOf=aaaa&name=python')
+        .reply(200, { items: [{ id: 'aaaa/bbbb', name: 'python' }] })
+        .get(
+          '/registry/v1/tags?uidp.childrenOf=aaaa/bbbb&excludeReferrers=true',
+        )
+        .reply(200, {
+          items: [
+            {
+              id: 'aaaa/bbbb/1',
+              name: '3.14',
+              digest: 'sha256:fresh',
+              lastUpdated: '2026-06-19T23:00:00.000Z',
+            },
+          ],
+        })
+        .get('/registry/v1/tags/aaaa/bbbb/1/history')
+        .reply(200, {
+          items: [
+            {
+              digest: 'sha256:settled',
+              updateTimestamp: '2026-06-11T00:00:00.000Z',
+            },
+            {
+              digest: 'sha256:fresh',
+              updateTimestamp: '2026-06-19T23:00:00.000Z',
+            },
+          ],
+        });
+      httpMock
+        .scope('https://cgr.dev')
+        .get('/v2/')
+        .reply(200, '', {})
+        .get('/v2/my-org/python/manifests/3.14')
+        .reply(200, '', {});
+
+      const res = await getPkgReleases({
+        datasource: DockerDatasource.id,
+        packageName: 'cgr.dev/my-org/python',
+        minimumReleaseAge: '7 days',
+      });
+
+      expect(res?.releases).toMatchObject([
+        {
+          version: '3.14',
+          releaseTimestamp: '2026-06-11T00:00:00.000Z',
+          newDigest: 'sha256:settled',
+        },
+      ]);
+
+      vi.useRealTimers();
+    });
+
+    it('Falls back to the Docker API for cgr.dev when disabled', async () => {
+      vi.stubEnv('RENOVATE_X_CHAINGUARD_TAGS_DISABLE', 'true');
+      httpMock
+        .scope('https://cgr.dev')
+        // Once for the auth probe in `getAuthHeaders()`, once for the listing.
+        .get('/v2/my-org/python/tags/list?n=10000')
+        .twice()
+        .reply(200, { tags: ['3.14'] }, {})
+        .get('/v2/')
+        .reply(200, '', {})
+        .get('/v2/my-org/python/manifests/3.14')
+        .reply(200, '', {});
+
+      const res = await getPkgReleases({
+        datasource: DockerDatasource.id,
+        packageName: 'cgr.dev/my-org/python',
+      });
+
+      expect(res?.releases).toMatchObject([{ version: '3.14' }]);
     });
 
     it('Uses custom page limit for Docker hub repository tags', async () => {

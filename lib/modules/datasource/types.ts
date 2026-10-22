@@ -56,6 +56,14 @@ export interface GetReleasesConfig {
    */
   constraintsVersioning?: Partial<Record<AdditionalConstraintName, string>>;
   constraintsFiltering?: ConstraintsFilter;
+  /**
+   * The resolved `minimumReleaseAge`, for the datasources which can serve an
+   * older view of a package rather than only the current one. Most
+   * datasources should ignore this and let `filterInternalChecks()` apply the
+   * window to whatever they return.
+   */
+  minimumReleaseAge?: string | null;
+  minimumReleaseAgeBuffer?: string | null;
 }
 
 /**
