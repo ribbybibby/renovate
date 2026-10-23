@@ -181,22 +181,25 @@ export async function filterInternalChecks(
 
       // A registry which republishes a reference in place keeps it
       // permanently too fresh to satisfy the window. Ask the datasource what
-      // the reference pointed at when the window opened, so the update can be
-      // made at a digest which does satisfy it.
+      // the reference pointed at when the window opened, so the update can
+      // be made at a digest which does satisfy it.
       //
-      // `willWriteDigest` reads `config`, not the `updateType`-resolved
-      // `releaseConfig`, because `resolveUpdateDigests()` decides from the
-      // same object. If the two disagreed, the reported age would describe a
-      // digest that never reaches the package file.
-      if (
+      // `willWriteDigest` reads `config` rather than the `updateType`-
+      // resolved `releaseConfig`, because `resolveUpdateDigests()` decides
+      // from the same object; if they disagreed, the reported age would
+      // describe a digest that never reaches the package file.
+      const cutoff =
         ageCheck.isPending &&
         getEnv().RENOVATE_X_REWIND_DIGESTS &&
         willWriteDigest(config)
-      ) {
-        const cutoff = asTimestamp(Date.now() - ageCheck.minimumReleaseAgeMs);
-        const digestAt = cutoff
-          ? await getDigestAt(releaseConfig, candidateRelease, cutoff)
+          ? asTimestamp(Date.now() - ageCheck.minimumReleaseAgeMs)
           : null;
+      if (cutoff) {
+        const digestAt = await getDigestAt(
+          releaseConfig,
+          candidateRelease,
+          cutoff,
+        );
         if (digestAt) {
           candidateRelease = {
             ...candidateRelease,

@@ -49,8 +49,8 @@ export async function getChainguardTagHistory(
 /**
  * The newest entry at or before `cutoff`.
  *
- * Scans rather than indexing: the endpoint's ordering depends on how it was
- * queried, and an entry dropped by `LooseArray` would shift a fixed position.
+ * Scans rather than indexing: ordering depends on how the endpoint was
+ * queried, and a dropped entry would shift a fixed position.
  */
 export function newestEntryAtOrBefore(
   history: ChainguardTagHistoryEntry[],

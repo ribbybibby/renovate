@@ -1,14 +1,11 @@
 import type { LookupUpdateConfig } from './types.ts';
 
 /**
- * Whether a digest Renovate resolves will actually be written to the package
- * file.
+ * Whether a resolved digest will be written to the package file.
  *
- * Lives on its own so that `resolveUpdateDigests()` and the datasource layer
- * can't drift: a datasource which reports a digest-specific
- * `releaseTimestamp` is only telling the truth when the digest lands too.
- * Without a digest the reference stays mutable, and what gets pulled is
- * whatever the tag resolves to at the time.
+ * Shared with `filterInternalChecks()` so the two can't drift: without a
+ * written digest the reference stays mutable, and an age reported for an
+ * older digest would describe something the user never pulls.
  */
 export function willWriteDigest(
   config: Pick<

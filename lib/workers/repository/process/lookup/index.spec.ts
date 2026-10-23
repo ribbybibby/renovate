@@ -82,6 +82,7 @@ describe('workers/repository/process/lookup/index', () => {
   );
 
   const getDockerDigest = vi.spyOn(DockerDatasource.prototype, 'getDigest');
+  const getDockerDigestAt = vi.spyOn(DockerDatasource.prototype, 'getDigestAt');
 
   beforeEach(() => {
     // TODO: fix types #22198
@@ -4465,6 +4466,36 @@ describe('workers/repository/process/lookup/index', () => {
         versioning: 'npm',
         warnings: [],
       });
+    });
+
+    it('writes the digest a rebuilt tag pointed at when the window opened', async () => {
+      // The rewound digest has to survive `resolveUpdateDigest()`'s `??=`
+      // chain; if it ever stopped doing so the feature would be inert while
+      // every datasource-level test still passed.
+      vi.stubEnv('RENOVATE_X_REWIND_DIGESTS', 'true');
+      config.currentValue = '8.0.0';
+      config.packageName = 'node';
+      config.datasource = DockerDatasource.id;
+      config.pinDigests = true;
+      config.minimumReleaseAge = '7 days';
+      config.internalChecksFilter = 'strict';
+      getDockerReleases.mockResolvedValueOnce({
+        releases: [{ version: '8.0.0' }, { version: '8.1.0' }],
+      });
+      getDockerDigestAt.mockResolvedValueOnce({
+        digest: 'sha256:settled',
+        releaseTimestamp: '2020-01-01T00:00:00.000Z' as Timestamp,
+      });
+      getDockerDigest.mockResolvedValue('sha256:live');
+
+      const res = await Result.wrap(
+        lookup.lookupUpdates(config),
+      ).unwrapOrThrow();
+
+      expect(res.updates).toMatchObject([
+        { newValue: '8.1.0', newDigest: 'sha256:settled' },
+        { updateType: 'pinDigest', newDigest: 'sha256:live' },
+      ]);
     });
 
     it('skips unsupported values', async () => {

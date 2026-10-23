@@ -54,6 +54,19 @@ describe('modules/datasource/docker/chainguard', () => {
       await expect(fetch()).resolves.toEqual([]);
     });
 
+    it('drops entries it cannot parse', async () => {
+      scope().reply(200, {
+        history: [
+          { digest: 42, updateTimestamp: '2026-06-02T00:00:00.000Z' },
+          { digest: 'sha256:ok', updateTimestamp: '2026-06-03T00:00:00.000Z' },
+        ],
+      });
+
+      await expect(fetch()).resolves.toEqual([
+        { digest: 'sha256:ok', updateTimestamp: '2026-06-03T00:00:00.000Z' },
+      ]);
+    });
+
     it('returns null when the registry refuses auth', async () => {
       httpMock.scope(CHAINGUARD_REGISTRY).get('/v2/').reply(401, '', {});
 

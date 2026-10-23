@@ -10,6 +10,7 @@ import { logger, partial } from '~test/util.ts';
 import { range } from '../../../../lib/util/range.ts';
 import { GlobalConfig } from '../../../config/global.ts';
 import { EXTERNAL_HOST_ERROR } from '../../../constants/error-messages.ts';
+import { ExternalHostError } from '../../../types/errors/external-host-error.ts';
 import * as packageCache from '../../../util/cache/package/index.ts';
 import type { Timestamp } from '../../../util/timestamp.ts';
 import { getDigest, getPkgReleases } from '../index.ts';
@@ -3921,6 +3922,24 @@ describe('modules/datasource/docker/index', () => {
         await expect(
           datasource.postprocessRelease(config, release),
         ).resolves.toBe(release);
+      });
+
+      it('rethrows ExternalHostError so the run can abort', async () => {
+        // A 5xx while minting the pull token is an infrastructure failure,
+        // not a missing tag, so it must not read as "no history".
+        httpMock
+          .scope('https://cgr.dev')
+          .get('/v2/')
+          .reply(401, '', {
+            'www-authenticate':
+              'Bearer realm="https://cgr.dev/token",service="cgr.dev"',
+          })
+          .get('/token?service=cgr.dev&scope=repository:my-org/python:pull')
+          .reply(500);
+
+        await expect(
+          datasource.postprocessRelease(config, release),
+        ).rejects.toThrow(ExternalHostError);
       });
 
       it('leaves the release alone when the lookup fails', async () => {

@@ -633,6 +633,16 @@ describe('workers/repository/process/lookup/filter-checks', () => {
       expect(release?.newDigest).toBeUndefined();
     });
 
+    it('does not rewind when the window predates a usable timestamp', async () => {
+      config.minimumReleaseAge = '100 years';
+      const ds = new RewindingDatasource(historic);
+      getDatasourceFor.mockReturnValue(ds);
+
+      await filterInternalChecks(config, versioning, 'patch', sortedReleases);
+
+      expect(ds.calls).toBe(0);
+    });
+
     it('does not rewind without the opt-in', async () => {
       vi.stubEnv('RENOVATE_X_REWIND_DIGESTS', '');
       const ds = new RewindingDatasource(historic);

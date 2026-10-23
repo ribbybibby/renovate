@@ -231,6 +231,9 @@ Unlike `digest` updates, an _unversioned_ current value (such as `latest`) is ex
 
 If the current value _does_ resolve to a version, but that version's datasource doesn't expose a release timestamp (for example GHCR, Quay or ECR), the same caveats as [`digest` updates](#digest-updates) apply: the update is held indefinitely under the default `minimumReleaseAgeBehaviour=timestamp-required`, and needs `minimumReleaseAgeBehaviour=timestamp-optional` configured to raise it without an age check.
 
+`cgr.dev` used to be such a registry and no longer is, which changes what `timestamp-optional` does there: updates that previously flowed because nothing could be dated are now dated, and a tag which is still being rebuilt stays pending.
+See the [`docker` datasource](../modules/datasource/docker/index.md) for how to keep those updates flowing.
+
 ##### Avoiding `pinDigest` updates not being raised due to frequently-releasing packages
 
 Because a `pinDigest` update ages against the newest matching version, a reference that releases faster than your configured `minimumReleaseAge` may never clear the check - leaving it perpetually unpinned, which is _less_ safe than pinning to a slightly-stale release.
@@ -337,7 +340,7 @@ The below is a non-exhaustive list of public registries which support release ti
 | `crate`              | `https://crates.io`                                | ✅        |                                                                  |
 | `rubygems`           | `https://rubygems.org`                             | ✅        |                                                                  |
 | `docker`             | `https://index.docker.io`                          | ✅        |                                                                  |
-| `docker`             | `https://cgr.dev`                                  | ✅        | Uses the `_chainguard` OCI extension; rewinds rebuilt tags       |
+| `docker`             | `https://cgr.dev`                                  | ✅        | Uses the `_chainguard` OCI extension for tag history             |
 | `docker`             | (not Docker Hub or `cgr.dev`)                      | ❌        | [Issue](https://github.com/renovatebot/renovate/issues/38656)    |
 | `docker`             | `https://ghcr.io`                                  | ❌        | [Issue](https://github.com/renovatebot/renovate/issues/39064)    |
 | `docker`             | `https://quay.io`                                  | ❌        | [Issue](https://github.com/renovatebot/renovate/issues/38572)    |
