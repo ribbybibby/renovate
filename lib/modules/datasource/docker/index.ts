@@ -35,12 +35,7 @@ import {
   isCrossOriginPaginationAllowed,
   resolvePaginationUrl,
 } from '../util.ts';
-import {
-  chainguardTagsAsReleases,
-  getChainguardTags as getChainguardTagList,
-  isChainguardEnabled,
-  rewindChainguardTag,
-} from './chainguard.ts';
+import { getChainguardTagHistory, rewindTagHistory } from './chainguard.ts';
 import {
   CHAINGUARD_REGISTRY,
   DOCKER_HUB,
@@ -109,7 +104,7 @@ export class DockerDatasource extends Datasource {
 
   override readonly releaseTimestampSupport = true;
   override readonly releaseTimestampNote =
-    'Only supported on Docker Hub, where the release timestamp is determined from the `tag_last_pushed` field in the results, and on `cgr.dev`, which queries the Chainguard platform API. **NOTE**: Currently, digests will receive the same release timestamp as the `tag_last_pushed`, which means that digests may appear newer than they are - see https://github.com/renovatebot/renovate/issues/38659';
+    'Only supported on Docker Hub, where the release timestamp is determined from the `tag_last_pushed` field in the results, and on `cgr.dev`, which reads tag history from the `_chainguard` OCI extension. **NOTE**: Currently, digests will receive the same release timestamp as the `tag_last_pushed`, which means that digests may appear newer than they are - see https://github.com/renovatebot/renovate/issues/38659';
   override readonly sourceUrlSupport = 'package';
   override readonly sourceUrlNote =
     'The source URL is determined from the `org.opencontainers.image.source` and `org.label-schema.vcs-url` labels present in the metadata of the **latest stable** image found on the Docker registry.';
@@ -1256,7 +1251,7 @@ export class DockerDatasource extends Datasource {
 
     type TagsResultType = AsyncResult<
       Release[],
-      NonNullable<Error | 'tags-error' | 'dockerhub-error' | 'chainguard-error'>
+      NonNullable<Error | 'tags-error' | 'dockerhub-error'>
     >;
 
     const getTags = (): TagsResultType =>
@@ -1271,33 +1266,11 @@ export class DockerDatasource extends Datasource {
         'dockerhub-error' as const,
       ).catch(getTags);
 
-    const getChainguardTags = (): TagsResultType =>
-      Result.wrapNullable(
-        getChainguardTagList(this.http, dockerRepository),
-        'chainguard-error' as const,
-      )
-        .transform(chainguardTagsAsReleases)
-        .catch((err) => {
-          // Without a log line here, an expired token looks indistinguishable
-          // from a registry that simply has no release timestamps.
-          logger.once.debug(
-            { err, dockerRepository },
-            'Chainguard: platform API lookup failed, falling back to the registry API',
-          );
-          return getTags();
-        });
-
-    let tagsResult: TagsResultType;
-    if (
+    const tagsResult =
       registryHost === DOCKER_HUB &&
       !getEnv().RENOVATE_X_DOCKER_HUB_TAGS_DISABLE
-    ) {
-      tagsResult = getDockerHubTags();
-    } else if (isChainguardEnabled(registryHost)) {
-      tagsResult = getChainguardTags();
-    } else {
-      tagsResult = getTags();
-    }
+        ? getDockerHubTags()
+        : getTags();
 
     const { val: releases, err } = await tagsResult.unwrap();
     if (err instanceof Error) {
@@ -1363,19 +1336,21 @@ export class DockerDatasource extends Datasource {
   }
 
   /**
-   * Rewinds a `cgr.dev` release to the state it was in when the
-   * `minimumReleaseAge` window opened.
+   * Dates a `cgr.dev` release, rewinding it if it's newer than the
+   * `minimumReleaseAge` window.
    *
-   * Chainguard rebuilds every supported tag whenever one of its packages
-   * changes, so a tag's current digest is nearly always newer than the window
-   * and aging it would withhold the update indefinitely. Reporting the digest
-   * the tag pointed at when the window opened, with the timestamp of that
-   * push, lets the update proceed at a digest which has satisfied the policy.
+   * The distribution API reports no timestamp for a tag, so without this the
+   * window can't apply to `cgr.dev` at all. Chainguard's tag-history extension
+   * supplies one — and because Chainguard rebuilds every supported tag
+   * whenever one of its packages changes, the tag's current digest is nearly
+   * always too new to pass. Reporting the digest the tag pointed at when the
+   * window opened, with the timestamp of that push, lets the update proceed at
+   * a digest that has satisfied the policy instead of being withheld until the
+   * tag stops being rebuilt.
    *
-   * Releases are left untouched when no window applies, when the tag is
-   * already settled, or when nothing in its history is old enough — the last
-   * of which leaves the caller to report it as pending, as it would for any
-   * other datasource.
+   * The release is returned untouched when the registry has no history for the
+   * tag, and when nothing in that history is old enough — the latter leaves
+   * the caller to report it as pending, as it would for any other datasource.
    */
   override async postprocessRelease(
     config: PostprocessReleaseConfig,
@@ -1388,45 +1363,51 @@ export class DockerDatasource extends Datasource {
       config.packageName,
       config.registryUrl,
     );
-    if (!isChainguardEnabled(registryHost)) {
-      return release;
-    }
-    const minimumReleaseAgeMs = calculateMinimumReleaseAgeMs(config);
-    if (!minimumReleaseAgeMs) {
-      return release;
-    }
-    const cutoff = Date.now() - minimumReleaseAgeMs;
-    if (
-      release.releaseTimestamp &&
-      Date.parse(release.releaseTimestamp) <= cutoff
-    ) {
+    if (registryHost !== CHAINGUARD_REGISTRY) {
       return release;
     }
 
+    let history;
     try {
-      const rewound = await rewindChainguardTag(
+      history = await getChainguardTagHistory(
         this.http,
+        registryHost,
         dockerRepository,
         release.version,
-        cutoff,
       );
-      if (!rewound) {
-        return release;
-      }
-      return {
-        ...release,
-        releaseTimestamp: rewound.releaseTimestamp,
-        newDigest: rewound.digest,
-      };
     } catch (err) {
-      // Leaving the release as-is keeps the age check honest: it ages against
-      // the current, too-fresh timestamp and holds the update, rather than
-      // letting it through unaged.
+      // Leaving the release undated holds it under the default
+      // `minimumReleaseAgeBehaviour`, rather than letting it through unaged.
       logger.once.debug(
         { err, dockerRepository, version: release.version },
-        'Chainguard: tag history lookup failed, leaving the release unrewound',
+        'Chainguard: tag history lookup failed',
       );
       return release;
     }
+    if (!history?.length) {
+      return release;
+    }
+
+    // Oldest first, so the last entry is where the tag points now.
+    const current = history.at(-1)!;
+    const minimumReleaseAgeMs = calculateMinimumReleaseAgeMs(config);
+    const cutoff = Date.now() - minimumReleaseAgeMs;
+
+    const entry =
+      !minimumReleaseAgeMs ||
+      (current.updateTimestamp && Date.parse(current.updateTimestamp) <= cutoff)
+        ? current
+        : rewindTagHistory(history, cutoff);
+
+    if (!entry?.updateTimestamp) {
+      return release;
+    }
+    return {
+      ...release,
+      releaseTimestamp: entry.updateTimestamp,
+      // Only pin a rewind: the current digest is better left to `getDigest()`,
+      // which resolves it arch-aware.
+      ...(entry !== current && { newDigest: entry.digest }),
+    };
   }
 }

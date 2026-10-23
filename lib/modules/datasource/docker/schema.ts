@@ -203,49 +203,15 @@ export const DockerHubTagsPage = z.object({
 });
 
 /**
- * Chainguard platform API resources are addressed by UIDP, a
- * slash-separated path of opaque ids rooted at the group.
- * https://edu.chainguard.dev/platform/api/spec-api-v1/
- */
-const ChainguardResource = z.object({
-  id: z.string(),
-});
-
-/**
- * None of these use `.catch()` on `items`: a payload we can't read has to be
- * distinguishable from a repository that genuinely has no tags, so that the
- * caller falls back to the distribution API instead of reporting zero
- * releases. `LooseArray` still drops individual malformed entries.
- */
-export const ChainguardGroupList = z.object({
-  items: LooseArray(ChainguardResource),
-});
-
-export const ChainguardRepoList = ChainguardGroupList;
-
-export const ChainguardTagList = z.object({
-  items: LooseArray(
-    ChainguardResource.extend({
-      name: z.string(),
-      lastUpdated: MaybeTimestamp,
-    }),
-    {
-      onError: ({ error }) => {
-        logger.debug(
-          { err: error },
-          'Chainguard: failed to parse some tags from the platform API',
-        );
-      },
-    },
-  ),
-});
-
-/**
- * One previous iteration of a mutable tag — the digest it used to point at,
- * and when it stopped.
+ * Response of Chainguard's `_chainguard/history/{tag}` OCI extension: every
+ * digest the tag has pointed at, oldest first.
+ *
+ * `history` deliberately has no `.catch()` — a payload we can't read must stay
+ * distinguishable from a tag that genuinely has no history, so the caller
+ * leaves the release alone rather than treating it as un-rewindable.
  */
 export const ChainguardTagHistory = z.object({
-  items: LooseArray(
+  history: LooseArray(
     z.object({
       digest: z.string(),
       updateTimestamp: MaybeTimestamp,
@@ -254,7 +220,7 @@ export const ChainguardTagHistory = z.object({
       onError: ({ error }) => {
         logger.debug(
           { err: error },
-          'Chainguard: failed to parse some tag history from the platform API',
+          'Chainguard: failed to parse some tag history entries',
         );
       },
     },

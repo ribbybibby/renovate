@@ -17,48 +17,18 @@ If you use [Harbor](https://goharbor.io/) as a proxy cache for Docker Hub, then 
 
 ## Chainguard (`cgr.dev`)
 
-The OCI distribution API gives no release timestamp for a tag, so `minimumReleaseAge` normally does nothing outside Docker Hub.
-For images on `cgr.dev` Renovate reads tags from the Chainguard platform API instead, which does.
+The OCI distribution API reports no release timestamp for a tag, so `minimumReleaseAge` normally does nothing outside Docker Hub.
+Chainguard serves a tag's history as an [OCI extension](https://github.com/opencontainers/distribution-spec/blob/main/extensions/_oci.md) at `/v2/{name}/_chainguard/history/{tag}`, which Renovate uses to date a `cgr.dev` release.
 
 Chainguard rebuilds every supported tag whenever one of its packages changes, so the digest a tag such as `3.14` points at is nearly always only hours old.
-Aging that timestamp against a window of days would hold every update forever, so when `minimumReleaseAge` is set Renovate asks the platform API what the tag pointed at when the window opened, and proposes _that_ digest.
+Ageing that timestamp against a window of days would hold every update forever, so when `minimumReleaseAge` is set Renovate takes the digest the tag pointed at when the window opened and proposes _that_.
 The update Renovate raises for `3.14` is therefore a digest which has been published for at least `minimumReleaseAge`, rather than being withheld until the tag stops being rebuilt.
 
-A rewound release is pinned to the digest the tag pointed at, which for a multi-architecture repository is the image index rather than an architecture-specific manifest.
-
 Rewinding means pinning a digest that Chainguard has already superseded, which may include a rebuild that carried a CVE fix.
-That is the trade `minimumReleaseAge` asks for, but it is worth stating plainly for a registry whose whole purpose is shipping patched images.
+That is the trade `minimumReleaseAge` asks for, but it is worth stating plainly for a registry whose purpose is shipping patched images.
 
 A rewound release is pinned to the digest the tag pointed at, which for a multi-architecture repository is the image index rather than an architecture-specific manifest.
+A tag which has never pointed at anything old enough is reported as pending, like any other release which has not aged yet.
 
-To use this, give Renovate a token for the platform API:
-
-```json
-{
-  "hostRules": [
-    {
-      "hostType": "docker",
-      "matchHost": "cgr.dev",
-      "username": "<your-pull-username>",
-      "password": "<your-pull-token>"
-    },
-    {
-      "hostType": "docker",
-      "matchHost": "console-api.enforce.dev",
-      "token": "<your-chainguard-token>"
-    }
-  ]
-}
-```
-
-Renovate only queries the platform API when the second rule is present; without it `cgr.dev` is read over the distribution API as before, and `minimumReleaseAge` does not apply.
-The API rejects anonymous requests, so there is nothing to be gained by trying.
-
-Mint the token with [`chainctl`](https://edu.chainguard.dev/chainguard/chainguard-enforce/chainctl-docs/):
-
-```bash
-chainctl auth token --audience https://console-api.enforce.dev
-```
-
-The token needs to read both IAM groups and the registry, because a `cgr.dev` path is resolved group by group before its tags can be listed.
-It is short-lived and must be refreshed before each run, so an [assumable identity](https://edu.chainguard.dev/chainguard/administration/assumable-ids/) is the only practical option for unattended use.
+No extra configuration is needed: the extension is served by `cgr.dev` itself and uses the same credentials as pulling the image.
+Registries which do not serve the extension answer `404`, and Renovate carries on as before.

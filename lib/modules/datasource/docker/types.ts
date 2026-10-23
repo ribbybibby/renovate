@@ -11,16 +11,8 @@ export interface RegistryRepository {
   dockerRepository: string;
 }
 
-/** The state a rewound tag was in when the `minimumReleaseAge` window opened. */
-export interface RewoundTag {
+/** One digest a Chainguard tag has pointed at, and when it was pushed. */
+export interface ChainguardTagHistoryEntry {
   digest: string;
-  releaseTimestamp: Timestamp;
-}
-
-/** A tag as the Chainguard platform API reports it. */
-export interface ChainguardTag {
-  /** UIDP, used to address the tag's history. */
-  id: string;
-  name: string;
-  lastUpdated: Timestamp | null;
+  updateTimestamp: Timestamp | null;
 }
