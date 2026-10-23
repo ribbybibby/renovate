@@ -47,6 +47,19 @@ describe('modules/datasource/docker/chainguard', () => {
       ]);
     });
 
+    it('returns null when the registry refuses auth', async () => {
+      httpMock.scope(CHAINGUARD_REGISTRY).get('/v2/').reply(401, '', {});
+
+      await expect(
+        getChainguardTagHistory(
+          http,
+          CHAINGUARD_REGISTRY,
+          'my-org/python',
+          '3.14',
+        ),
+      ).resolves.toBeNull();
+    });
+
     it('returns null when the registry has no history for the tag', async () => {
       httpMock
         .scope(CHAINGUARD_REGISTRY)
@@ -128,7 +141,7 @@ describe('modules/datasource/docker/chainguard', () => {
         ),
       ).toEqual({
         digest: 'sha256:settled',
-        updateTimestamp: '2026-06-11T00:00:00.000Z',
+        releaseTimestamp: '2026-06-11T00:00:00.000Z',
       });
     });
 
@@ -145,7 +158,7 @@ describe('modules/datasource/docker/chainguard', () => {
         ),
       ).toEqual({
         digest: 'sha256:exact',
-        updateTimestamp: '2026-06-13T00:00:00.000Z',
+        releaseTimestamp: '2026-06-13T00:00:00.000Z',
       });
     });
 
@@ -163,7 +176,7 @@ describe('modules/datasource/docker/chainguard', () => {
         ),
       ).toEqual({
         digest: 'sha256:settled',
-        updateTimestamp: '2026-06-11T00:00:00.000Z',
+        releaseTimestamp: '2026-06-11T00:00:00.000Z',
       });
     });
 

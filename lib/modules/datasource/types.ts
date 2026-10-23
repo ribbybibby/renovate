@@ -144,20 +144,23 @@ export type GitHostTag = Omit<Release, 'gitRef'>;
 export interface PostprocessReleaseConfig {
   packageName: string;
   registryUrl: string | null;
-  /**
-   * The `minimumReleaseAge` resolved for this release, already narrowed by
-   * `updateType`. Set so that a datasource whose registry rebuilds a tag in
-   * place can report the release as it stood when the window opened, rather
-   * than only as it stands now.
-   */
-  minimumReleaseAge?: string | null;
-  minimumReleaseAgeBuffer?: string | null;
-  /**
-   * Whether a digest reported alongside the release will be written to the
-   * package file. When it won't, the reference stays mutable, so a release
-   * can only honestly be dated by what it resolves to now.
-   */
-  willWriteDigest?: boolean;
+}
+
+/**
+ * What a datasource's `getDigestAt()` receives.
+ */
+export interface DigestAtConfig {
+  packageName: string;
+  registryUrl: string | null;
+}
+
+/**
+ * A digest a mutable reference pointed at in the past, and when it was
+ * published there.
+ */
+export interface DigestAt {
+  digest: string;
+  releaseTimestamp: Timestamp;
 }
 
 export type PostprocessReleaseResult = Release | 'reject';
@@ -262,4 +265,24 @@ export interface DatasourceApi extends ModuleApi {
     config: PostprocessReleaseConfig,
     release: Release,
   ): Promise<PostprocessReleaseResult>;
+
+  /**
+   * Resolves what `newValue` pointed at on or before `before`.
+   *
+   * Implemented by datasources whose registry republishes a reference in
+   * place, where the current digest is therefore always newer than a
+   * `minimumReleaseAge` window and the update could never satisfy it.
+   *
+   * Only called when the resolved digest will be written to the package file,
+   * because the older digest is the whole claim being made: without it the
+   * reference stays mutable and still resolves to the current content.
+   *
+   * Returns `null` when the reference has never pointed at anything old
+   * enough, which leaves the update pending as usual.
+   */
+  getDigestAt?(
+    config: DigestAtConfig,
+    newValue: string,
+    before: number,
+  ): Promise<DigestAt | null>;
 }

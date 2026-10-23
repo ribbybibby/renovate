@@ -3824,17 +3824,14 @@ describe('modules/datasource/docker/index', () => {
     });
   });
 
-  describe('postprocessRelease', () => {
+  describe('cgr.dev tag history', () => {
     const datasource = new DockerDatasource();
     const config = {
       packageName: 'cgr.dev/my-org/python',
       registryUrl: 'https://cgr.dev',
-      minimumReleaseAge: '7 days',
-      willWriteDigest: true,
     };
-    const release = {
-      version: '3.14',
-    };
+    const release = { version: '3.14' };
+    const cutoff = Date.parse('2026-06-13T00:00:00.000Z');
 
     function mockHistory(history: unknown): void {
       httpMock
@@ -3845,143 +3842,152 @@ describe('modules/datasource/docker/index', () => {
         .reply(200, { history });
     }
 
+    const twoEntries = [
+      { digest: 'sha256:settled', updateTimestamp: '2026-06-11T00:00:00.000Z' },
+      { digest: 'sha256:fresh', updateTimestamp: '2026-06-19T23:00:00.000Z' },
+    ];
+
     beforeEach(() => {
       hostRules.clear();
-      vi.useFakeTimers();
-      vi.setSystemTime('2026-06-20T00:00:00.000Z');
     });
 
-    afterEach(() => {
-      vi.useRealTimers();
-    });
+    describe('postprocessRelease', () => {
+      it('dates a release from the digest the tag points at now', async () => {
+        mockHistory(twoEntries);
 
-    it('rewinds a too-fresh tag to the digest it pointed at', async () => {
-      mockHistory([
-        {
-          digest: 'sha256:settled',
-          updateTimestamp: '2026-06-11T00:00:00.000Z',
-        },
-        { digest: 'sha256:fresh', updateTimestamp: '2026-06-19T23:00:00.000Z' },
-      ]);
-
-      await expect(
-        datasource.postprocessRelease(config, release),
-      ).resolves.toEqual({
-        version: '3.14',
-        releaseTimestamp: '2026-06-11T00:00:00.000Z',
-        newDigest: 'sha256:settled',
+        // Never rewound: `postprocessRelease` also dates the incumbent
+        // version, where an older timestamp would be wrong.
+        await expect(
+          datasource.postprocessRelease(config, release),
+        ).resolves.toEqual({
+          version: '3.14',
+          releaseTimestamp: '2026-06-19T23:00:00.000Z',
+        });
       });
-    });
 
-    it('dates a settled tag without pinning a digest', async () => {
-      mockHistory([
-        { digest: 'sha256:old', updateTimestamp: '2026-06-01T00:00:00.000Z' },
-        {
-          digest: 'sha256:settled',
-          updateTimestamp: '2026-06-05T00:00:00.000Z',
-        },
-      ]);
+      it('picks the newest entry rather than the last', async () => {
+        mockHistory([...twoEntries].reverse());
 
-      // No `newDigest`: the current digest is left to `getDigest()`, which
-      // resolves it arch-aware.
-      await expect(
-        datasource.postprocessRelease(config, release),
-      ).resolves.toEqual({
-        version: '3.14',
-        releaseTimestamp: '2026-06-05T00:00:00.000Z',
+        await expect(
+          datasource.postprocessRelease(config, release),
+        ).resolves.toEqual({
+          version: '3.14',
+          releaseTimestamp: '2026-06-19T23:00:00.000Z',
+        });
       });
-    });
 
-    it('does not rewind when the digest will not be written', async () => {
-      mockHistory([
-        {
-          digest: 'sha256:settled',
-          updateTimestamp: '2026-06-11T00:00:00.000Z',
-        },
-        { digest: 'sha256:fresh', updateTimestamp: '2026-06-19T23:00:00.000Z' },
-      ]);
+      it('uses the original tag when versionCompatibility rewrote it', async () => {
+        httpMock
+          .scope('https://cgr.dev')
+          .get('/v2/')
+          .reply(200, '', {})
+          .get('/v2/my-org/python/_chainguard/history/3.14-dev')
+          .reply(200, { history: twoEntries });
 
-      // A bare `:3.14` pulls whatever the tag points at, so it is dated by
-      // the current digest and held until the tag itself settles.
-      await expect(
-        datasource.postprocessRelease(
-          { ...config, willWriteDigest: false },
+        await expect(
+          datasource.postprocessRelease(config, {
+            version: '3.14',
+            versionOrig: '3.14-dev',
+          }),
+        ).resolves.toMatchObject({
+          releaseTimestamp: '2026-06-19T23:00:00.000Z',
+        });
+      });
+
+      it.each`
+        scenario               | history
+        ${'empty history'}     | ${[]}
+        ${'undatable entries'} | ${[{ digest: 'sha256:a', updateTimestamp: 'whenever' }]}
+      `('leaves the release alone with $scenario', async ({ history }) => {
+        mockHistory(history);
+
+        await expect(
+          datasource.postprocessRelease(config, release),
+        ).resolves.toBe(release);
+      });
+
+      it('leaves the release alone when the registry has no history', async () => {
+        httpMock
+          .scope('https://cgr.dev')
+          .get('/v2/')
+          .reply(200, '', {})
+          .get('/v2/my-org/python/_chainguard/history/3.14')
+          .reply(404);
+
+        await expect(
+          datasource.postprocessRelease(config, release),
+        ).resolves.toBe(release);
+      });
+
+      it('leaves the release alone when the lookup fails', async () => {
+        httpMock
+          .scope('https://cgr.dev')
+          .get('/v2/')
+          .reply(200, '', {})
+          .get('/v2/my-org/python/_chainguard/history/3.14')
+          .reply(500);
+
+        await expect(
+          datasource.postprocessRelease(config, release),
+        ).resolves.toBe(release);
+      });
+
+      it.each`
+        scenario              | cfg
+        ${'null registryUrl'} | ${{ packageName: 'cgr.dev/my-org/python', registryUrl: null }}
+        ${'another registry'} | ${{ packageName: 'index.docker.io/library/node', registryUrl: 'https://index.docker.io' }}
+      `('is a no-op with $scenario', async ({ cfg }) => {
+        await expect(datasource.postprocessRelease(cfg, release)).resolves.toBe(
           release,
-        ),
-      ).resolves.toEqual({
-        version: '3.14',
-        releaseTimestamp: '2026-06-19T23:00:00.000Z',
+        );
       });
     });
 
-    it('dates the tag from its current digest when no window applies', async () => {
-      mockHistory([
-        { digest: 'sha256:fresh', updateTimestamp: '2026-06-19T23:00:00.000Z' },
-      ]);
+    describe('getDigestAt', () => {
+      it('returns the digest the tag pointed at before the cutoff', async () => {
+        mockHistory(twoEntries);
 
-      await expect(
-        datasource.postprocessRelease(
-          {
-            packageName: config.packageName,
-            registryUrl: config.registryUrl,
-            willWriteDigest: true,
-          },
-          release,
-        ),
-      ).resolves.toEqual({
-        version: '3.14',
-        releaseTimestamp: '2026-06-19T23:00:00.000Z',
+        await expect(
+          datasource.getDigestAt(config, '3.14', cutoff),
+        ).resolves.toEqual({
+          digest: 'sha256:settled',
+          releaseTimestamp: '2026-06-11T00:00:00.000Z',
+        });
       });
-    });
 
-    it('leaves a tag undated when nothing in history is old enough', async () => {
-      mockHistory([
-        { digest: 'sha256:fresh', updateTimestamp: '2026-06-19T23:00:00.000Z' },
-      ]);
+      it('returns null when nothing is old enough', async () => {
+        mockHistory([twoEntries[1]]);
 
-      // Returned unchanged rather than dropped, so the caller still reports
-      // it as pending instead of the version vanishing.
-      await expect(
-        datasource.postprocessRelease(config, release),
-      ).resolves.toBe(release);
-    });
+        await expect(
+          datasource.getDigestAt(config, '3.14', cutoff),
+        ).resolves.toBeNull();
+      });
 
-    it('leaves the release alone when the registry has no history', async () => {
-      httpMock
-        .scope('https://cgr.dev')
-        .get('/v2/')
-        .reply(200, '', {})
-        .get('/v2/my-org/python/_chainguard/history/3.14')
-        .reply(404);
+      it('returns null when the registry has no history', async () => {
+        httpMock
+          .scope('https://cgr.dev')
+          .get('/v2/')
+          .reply(200, '', {})
+          .get('/v2/my-org/python/_chainguard/history/3.14')
+          .reply(404);
 
-      await expect(
-        datasource.postprocessRelease(config, release),
-      ).resolves.toBe(release);
-    });
+        await expect(
+          datasource.getDigestAt(config, '3.14', cutoff),
+        ).resolves.toBeNull();
+      });
 
-    it('leaves the release alone when the history lookup fails', async () => {
-      httpMock
-        .scope('https://cgr.dev')
-        .get('/v2/')
-        .reply(200, '', {})
-        .get('/v2/my-org/python/_chainguard/history/3.14')
-        .reply(500);
-
-      // Ageing against nothing holds the update under the default
-      // behaviour; the alternative would be letting it through unaged.
-      await expect(
-        datasource.postprocessRelease(config, release),
-      ).resolves.toBe(release);
-    });
-
-    it.each`
-      scenario              | cfg
-      ${'null registryUrl'} | ${{ packageName: 'cgr.dev/my-org/python', registryUrl: null }}
-      ${'another registry'} | ${{ packageName: 'index.docker.io/library/node', registryUrl: 'https://index.docker.io', minimumReleaseAge: '7 days' }}
-    `('is a no-op with $scenario', async ({ cfg }) => {
-      await expect(datasource.postprocessRelease(cfg, release)).resolves.toBe(
-        release,
-      );
+      it('returns null for another registry', async () => {
+        await expect(
+          datasource.getDigestAt(
+            {
+              packageName: 'index.docker.io/library/node',
+              registryUrl: 'https://index.docker.io',
+            },
+            '3.14',
+            cutoff,
+          ),
+        ).resolves.toBeNull();
+      });
     });
   });
 });

@@ -217,6 +217,8 @@ export const ChainguardTagHistory = z.object({
       updateTimestamp: MaybeTimestamp,
     }),
     {
+      // Only fires for an entry with no usable `digest`; an unparseable
+      // `updateTimestamp` is kept as null and skipped by the callers.
       onError: ({ error }) => {
         logger.debug(
           { err: error },

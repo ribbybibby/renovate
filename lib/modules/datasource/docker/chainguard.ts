@@ -1,6 +1,7 @@
 import { logger } from '../../../logger/index.ts';
 import { memCacheProvider } from '../../../util/http/cache/memory-http-cache-provider.ts';
 import type { Http } from '../../../util/http/index.ts';
+import type { DigestAt } from '../types.ts';
 import { getAuthHeaders } from './common.ts';
 import { ChainguardTagHistory } from './schema.ts';
 import type { ChainguardTagHistoryEntry } from './types.ts';
@@ -57,6 +58,32 @@ export async function getChainguardTagHistory(
 }
 
 /**
+ * The entry the tag points at now.
+ *
+ * Chosen by timestamp rather than by position: the response is oldest-first
+ * in practice, but a reordered response or an entry dropped by `LooseArray`
+ * would otherwise date the tag older than it is, which lets an update through
+ * the window early.
+ */
+export function newestHistoryEntry(
+  history: ChainguardTagHistoryEntry[],
+): ChainguardTagHistoryEntry | null {
+  let best: ChainguardTagHistoryEntry | null = null;
+  for (const entry of history) {
+    if (!entry.updateTimestamp) {
+      continue;
+    }
+    if (
+      best === null ||
+      Date.parse(entry.updateTimestamp) > Date.parse(best.updateTimestamp!)
+    ) {
+      best = entry;
+    }
+  }
+  return best;
+}
+
+/**
  * The newest entry at or before `cutoff`.
  *
  * `null` means the tag has never pointed at anything old enough, so there is
@@ -65,8 +92,8 @@ export async function getChainguardTagHistory(
 export function rewindTagHistory(
   history: ChainguardTagHistoryEntry[],
   cutoff: number,
-): ChainguardTagHistoryEntry | null {
-  let best: ChainguardTagHistoryEntry | null = null;
+): DigestAt | null {
+  let best: DigestAt | null = null;
   for (const entry of history) {
     // Drop undatable entries: we can't prove they sit outside the window.
     if (!entry.updateTimestamp) {
@@ -76,8 +103,8 @@ export function rewindTagHistory(
     if (ms > cutoff) {
       continue;
     }
-    if (best === null || ms > Date.parse(best.updateTimestamp!)) {
-      best = entry;
+    if (best === null || ms > Date.parse(best.releaseTimestamp)) {
+      best = { digest: entry.digest, releaseTimestamp: entry.updateTimestamp };
     }
   }
   return best;

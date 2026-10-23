@@ -4,6 +4,7 @@ import type {
   UpdateType,
 } from '../../../../config/types.ts';
 import { logger } from '../../../../logger/index.ts';
+import { getDigestAt } from '../../../../modules/datasource/digest-at.ts';
 import type { Release } from '../../../../modules/datasource/index.ts';
 import { postprocessRelease } from '../../../../modules/datasource/postprocess-release.ts';
 import type { VersioningApi } from '../../../../modules/versioning/index.ts';
@@ -15,6 +16,7 @@ import {
 import type { MergeConfidence } from '../../../../util/merge-confidence/types.ts';
 import { checkMinimumReleaseAge } from '../../../../util/minimum-release-age.ts';
 import { applyPackageRules } from '../../../../util/package-rules/index.ts';
+import { willWriteDigest } from './digest-pinning.ts';
 import type { LookupUpdateConfig, UpdateResult } from './types.ts';
 import { classifyRelease } from './update-type.ts';
 
@@ -170,10 +172,38 @@ export async function filterInternalChecks(
       // Now check for a minimumReleaseAge config
       const { updateType } = releaseConfig;
 
-      const ageCheck = checkMinimumReleaseAge(
+      let ageCheck = checkMinimumReleaseAge(
         releaseConfig,
         candidateRelease.releaseTimestamp,
       );
+
+      // A registry which republishes a reference in place keeps it
+      // permanently too fresh to satisfy the window. Ask the datasource what
+      // the reference pointed at when the window opened, so the update can be
+      // made at a digest which does satisfy it.
+      //
+      // `willWriteDigest` is read from the unmerged `config`, like
+      // `resolveUpdateDigests()`: an older digest is only worth reporting if
+      // it's the one written to the package file, and the two must agree on
+      // that or the reported age describes a digest nobody gets.
+      if (ageCheck.isPending && willWriteDigest(config)) {
+        const digestAt = await getDigestAt(
+          releaseConfig,
+          candidateRelease,
+          Date.now() - ageCheck.minimumReleaseAgeMs,
+        );
+        if (digestAt) {
+          candidateRelease = {
+            ...candidateRelease,
+            releaseTimestamp: digestAt.releaseTimestamp,
+            newDigest: digestAt.digest,
+          };
+          ageCheck = checkMinimumReleaseAge(
+            releaseConfig,
+            candidateRelease.releaseTimestamp,
+          );
+        }
+      }
       if (ageCheck.minimumReleaseAgeMs) {
         if (!ageCheck.hasTimestamp) {
           const minimumReleaseAgeBehaviour =

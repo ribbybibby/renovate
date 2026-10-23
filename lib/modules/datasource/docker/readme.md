@@ -19,21 +19,14 @@ If you use [Harbor](https://goharbor.io/) as a proxy cache for Docker Hub, then 
 
 The OCI distribution API reports no release timestamp for a tag, so `minimumReleaseAge` normally does nothing outside Docker Hub.
 Chainguard serves a tag's history as an [OCI extension](https://github.com/opencontainers/distribution-spec/blob/main/extensions/_oci.md) at `/v2/{name}/_chainguard/history/{tag}`, which Renovate uses to date a `cgr.dev` release.
+No extra configuration is needed: the extension uses the same credentials as pulling the image, and registries which do not serve it answer `404`.
 
-Chainguard rebuilds every supported tag whenever one of its packages changes, so the digest a tag such as `3.14` points at is nearly always only hours old.
-Ageing that timestamp against a window of days would hold every update forever, so when `minimumReleaseAge` is set Renovate takes the digest the tag pointed at when the window opened and proposes _that_.
-The update Renovate raises for `3.14` is therefore a digest which has been published for at least `minimumReleaseAge`, rather than being withheld until the tag stops being rebuilt.
+Chainguard rebuilds every supported tag whenever one of its packages changes, so the digest a tag such as `3.14` points at is nearly always only hours old, and a cooldown measured in days would never pass.
+Where Renovate writes the digest to the package file — with [`pinDigests`](../../../configuration-options.md#pindigests), or a reference which is already digest-pinned — it instead proposes the digest the tag pointed at when the window opened, which has been published long enough to satisfy the policy.
+That means pinning a digest Chainguard has already superseded, possibly one that was replaced by a CVE fix.
 
-Rewinding only happens where the digest is written to the package file, so it needs [`pinDigests`](../../../configuration-options.md#pindigests) or a reference which is already digest-pinned.
-A bare `cgr.dev/my-org/python:3.14` resolves to whatever the tag points at when it is pulled, so there is no digest to hold it still and no honest way to claim it is older than it is.
-Those references are dated by the digest the tag points at now, which means an update to a tag that is still being rebuilt stays pending until the tag has been unchanged for `minimumReleaseAge`.
-If you want cooldowns to be satisfiable on `cgr.dev`, pin digests.
+A bare `cgr.dev/my-org/python:3.14` resolves to whatever the tag points at when it is pulled, so there is no digest to hold it still.
+Those references are dated by the digest the tag points at now, and an update to a tag that is still being rebuilt stays pending until the tag has been unchanged for `minimumReleaseAge`.
+Pin digests if you want cooldowns to be satisfiable on `cgr.dev`.
 
-Rewinding means pinning a digest that Chainguard has already superseded, which may include a rebuild that carried a CVE fix.
-That is the trade `minimumReleaseAge` asks for, but it is worth stating plainly for a registry whose purpose is shipping patched images.
-
-A rewound release is pinned to the digest the tag pointed at, which for a multi-architecture repository is the image index rather than an architecture-specific manifest.
-A tag which has never pointed at anything old enough is reported as pending, like any other release which has not aged yet.
-
-No extra configuration is needed: the extension is served by `cgr.dev` itself and uses the same credentials as pulling the image.
-Registries which do not serve the extension answer `404`, and Renovate carries on as before.
+A rewound digest is the one the tag pointed at, which for a multi-architecture repository is the image index rather than an architecture-specific manifest — so an existing architecture-specific pin becomes an index pin.

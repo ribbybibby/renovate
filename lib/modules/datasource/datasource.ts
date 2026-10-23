@@ -11,6 +11,8 @@ import type { HttpOptions } from '../../util/http/types.ts';
 import { coerceObject } from '../../util/object.ts';
 import type {
   DatasourceApi,
+  DigestAt,
+  DigestAtConfig,
   DigestConfig,
   GetReleasesConfig,
   PostprocessReleaseConfig,
@@ -92,6 +94,12 @@ export abstract class Datasource<
     config: PostprocessReleaseConfig,
     release: Release,
   ): Promise<PostprocessReleaseResult>;
+
+  getDigestAt?(
+    config: DigestAtConfig,
+    newValue: string,
+    before: number,
+  ): Promise<DigestAt | null>;
 
   handleHttpErrors(_err: HttpError): void {
     // intentionally empty

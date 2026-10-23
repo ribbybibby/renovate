@@ -1,5 +1,4 @@
 import { logger } from '../../logger/index.ts';
-import { willWriteDigest } from '../../workers/repository/process/lookup/digest-pinning.ts';
 import type {
   LookupUpdateConfig,
   UpdateResult,
@@ -48,13 +47,7 @@ export async function postprocessRelease(
 
   try {
     const result = await ds.postprocessRelease(
-      {
-        packageName,
-        registryUrl,
-        minimumReleaseAge: config.minimumReleaseAge,
-        minimumReleaseAgeBuffer: config.minimumReleaseAgeBuffer,
-        willWriteDigest: willWriteDigest(config),
-      },
+      { packageName, registryUrl },
       release,
     );
 
