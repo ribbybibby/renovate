@@ -146,19 +146,14 @@ export interface PostprocessReleaseConfig {
   registryUrl: string | null;
 }
 
-/**
- * What a datasource's `getDigestAt()` receives.
- */
-export interface DigestAtConfig {
-  packageName: string;
-  registryUrl: string | null;
-}
+/** Same inputs as `postprocessRelease()`. */
+export type DigestAtConfig = PostprocessReleaseConfig;
 
 /**
  * A digest a mutable reference pointed at in the past, and when it was
  * published there.
  */
-export interface DigestAt {
+export interface HistoricDigest {
   digest: string;
   releaseTimestamp: Timestamp;
 }
@@ -267,22 +262,16 @@ export interface DatasourceApi extends ModuleApi {
   ): Promise<PostprocessReleaseResult>;
 
   /**
-   * Resolves what `newValue` pointed at on or before `before`.
+   * Resolves what `newValue` pointed at on or before `before`, or `null` if
+   * it pointed at nothing that old.
    *
-   * Implemented by datasources whose registry republishes a reference in
-   * place, where the current digest is therefore always newer than a
-   * `minimumReleaseAge` window and the update could never satisfy it.
-   *
-   * Only called when the resolved digest will be written to the package file,
-   * because the older digest is the whole claim being made: without it the
-   * reference stays mutable and still resolves to the current content.
-   *
-   * Returns `null` when the reference has never pointed at anything old
-   * enough, which leaves the update pending as usual.
+   * For registries which republish a reference in place, where the current
+   * digest is always newer than a `minimumReleaseAge` window. Only called
+   * when the resolved digest will be written to the package file.
    */
   getDigestAt?(
     config: DigestAtConfig,
     newValue: string,
-    before: number,
-  ): Promise<DigestAt | null>;
+    before: Timestamp,
+  ): Promise<HistoricDigest | null>;
 }

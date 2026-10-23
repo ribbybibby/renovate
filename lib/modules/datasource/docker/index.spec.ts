@@ -11,6 +11,7 @@ import { range } from '../../../../lib/util/range.ts';
 import { GlobalConfig } from '../../../config/global.ts';
 import { EXTERNAL_HOST_ERROR } from '../../../constants/error-messages.ts';
 import * as packageCache from '../../../util/cache/package/index.ts';
+import type { Timestamp } from '../../../util/timestamp.ts';
 import { getDigest, getPkgReleases } from '../index.ts';
 import { DOCKER_HUB } from './common.ts';
 import { DockerHubCache } from './dockerhub-cache.ts';
@@ -3831,7 +3832,7 @@ describe('modules/datasource/docker/index', () => {
       registryUrl: 'https://cgr.dev',
     };
     const release = { version: '3.14' };
-    const cutoff = Date.parse('2026-06-13T00:00:00.000Z');
+    const cutoff = '2026-06-13T00:00:00.000Z' as Timestamp;
 
     function mockHistory(history: unknown): void {
       httpMock
@@ -3839,6 +3840,7 @@ describe('modules/datasource/docker/index', () => {
         .get('/v2/')
         .reply(200, '', {})
         .get('/v2/my-org/python/_chainguard/history/3.14')
+        .query(true)
         .reply(200, { history });
     }
 
@@ -3882,6 +3884,7 @@ describe('modules/datasource/docker/index', () => {
           .get('/v2/')
           .reply(200, '', {})
           .get('/v2/my-org/python/_chainguard/history/3.14-dev')
+          .query(true)
           .reply(200, { history: twoEntries });
 
         await expect(
@@ -3912,6 +3915,7 @@ describe('modules/datasource/docker/index', () => {
           .get('/v2/')
           .reply(200, '', {})
           .get('/v2/my-org/python/_chainguard/history/3.14')
+          .query(true)
           .reply(404);
 
         await expect(
@@ -3925,6 +3929,7 @@ describe('modules/datasource/docker/index', () => {
           .get('/v2/')
           .reply(200, '', {})
           .get('/v2/my-org/python/_chainguard/history/3.14')
+          .query(true)
           .reply(500);
 
         await expect(
@@ -3969,6 +3974,7 @@ describe('modules/datasource/docker/index', () => {
           .get('/v2/')
           .reply(200, '', {})
           .get('/v2/my-org/python/_chainguard/history/3.14')
+          .query(true)
           .reply(404);
 
         await expect(

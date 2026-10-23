@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { logger } from '../../../logger/index.ts';
+import { coerceArray } from '../../../util/array.ts';
 import {
   DeepNullish,
   Json,
@@ -208,7 +209,8 @@ export const DockerHubTagsPage = z.object({
  *
  * `history` deliberately has no `.catch()` — a payload we can't read must stay
  * distinguishable from a tag that genuinely has no history, so the caller
- * leaves the release alone rather than treating it as un-rewindable.
+ * leaves the release alone rather than treating it as un-rewindable. The
+ * server sends `null` rather than `[]` for no rows, which is the latter.
  */
 export const ChainguardTagHistory = z.object({
   history: LooseArray(
@@ -226,7 +228,9 @@ export const ChainguardTagHistory = z.object({
         );
       },
     },
-  ),
+  )
+    .nullable()
+    .transform(coerceArray),
 });
 
 /**

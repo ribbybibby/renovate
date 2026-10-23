@@ -1,10 +1,12 @@
 import { logger } from '../../logger/index.ts';
+import { ExternalHostError } from '../../types/errors/external-host-error.ts';
+import type { Timestamp } from '../../util/timestamp.ts';
 import type {
   LookupUpdateConfig,
   UpdateResult,
 } from '../../workers/repository/process/lookup/types.ts';
 import { getDatasourceFor } from './common.ts';
-import type { DigestAt, Release } from './types.ts';
+import type { HistoricDigest, Release } from './types.ts';
 
 type Config = Partial<LookupUpdateConfig & UpdateResult>;
 
@@ -18,8 +20,8 @@ type Config = Partial<LookupUpdateConfig & UpdateResult>;
 export async function getDigestAt(
   config: Config,
   release: Release,
-  before: number,
-): Promise<DigestAt | null> {
+  before: Timestamp,
+): Promise<HistoricDigest | null> {
   const { datasource } = config;
 
   const ds = datasource && getDatasourceFor(datasource);
@@ -47,6 +49,9 @@ export async function getDigestAt(
       before,
     );
   } catch (err) {
+    if (err instanceof ExternalHostError) {
+      throw err;
+    }
     logger.debug(
       { err, datasource, packageName, version: release.version },
       'Failed to resolve a digest for the minimumReleaseAge window',

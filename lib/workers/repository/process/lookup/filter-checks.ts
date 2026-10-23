@@ -8,6 +8,7 @@ import { getDigestAt } from '../../../../modules/datasource/digest-at.ts';
 import type { Release } from '../../../../modules/datasource/index.ts';
 import { postprocessRelease } from '../../../../modules/datasource/postprocess-release.ts';
 import type { VersioningApi } from '../../../../modules/versioning/index.ts';
+import { getEnv } from '../../../../util/env.ts';
 import {
   getMergeConfidenceLevel,
   isActiveConfidenceLevel,
@@ -16,6 +17,7 @@ import {
 import type { MergeConfidence } from '../../../../util/merge-confidence/types.ts';
 import { checkMinimumReleaseAge } from '../../../../util/minimum-release-age.ts';
 import { applyPackageRules } from '../../../../util/package-rules/index.ts';
+import { asTimestamp } from '../../../../util/timestamp.ts';
 import { willWriteDigest } from './digest-pinning.ts';
 import type { LookupUpdateConfig, UpdateResult } from './types.ts';
 import { classifyRelease } from './update-type.ts';
@@ -182,16 +184,19 @@ export async function filterInternalChecks(
       // the reference pointed at when the window opened, so the update can be
       // made at a digest which does satisfy it.
       //
-      // `willWriteDigest` is read from the unmerged `config`, like
-      // `resolveUpdateDigests()`: an older digest is only worth reporting if
-      // it's the one written to the package file, and the two must agree on
-      // that or the reported age describes a digest nobody gets.
-      if (ageCheck.isPending && willWriteDigest(config)) {
-        const digestAt = await getDigestAt(
-          releaseConfig,
-          candidateRelease,
-          Date.now() - ageCheck.minimumReleaseAgeMs,
-        );
+      // `willWriteDigest` reads `config`, not the `updateType`-resolved
+      // `releaseConfig`, because `resolveUpdateDigests()` decides from the
+      // same object. If the two disagreed, the reported age would describe a
+      // digest that never reaches the package file.
+      if (
+        ageCheck.isPending &&
+        getEnv().RENOVATE_X_REWIND_DIGESTS &&
+        willWriteDigest(config)
+      ) {
+        const cutoff = asTimestamp(Date.now() - ageCheck.minimumReleaseAgeMs);
+        const digestAt = cutoff
+          ? await getDigestAt(releaseConfig, candidateRelease, cutoff)
+          : null;
         if (digestAt) {
           candidateRelease = {
             ...candidateRelease,

@@ -164,6 +164,13 @@ If set, Renovate will rewrite GitHub Enterprise Server's pagination responses to
 !!! note
   For the GitHub Enterprise Server platform only.
 
+## `RENOVATE_X_REWIND_DIGESTS`
+
+If set to any value, a release which fails `minimumReleaseAge` may be proposed at an older digest instead of being held, where the datasource can resolve one and the digest is written to the package file (`pinDigests`, or an already-pinned digest).
+
+This is for registries which republish a reference in place, such as `cgr.dev`: the digest a tag points at is always newer than the window, so the update could otherwise never satisfy it.
+The digest proposed is one the registry has already superseded, which may include a rebuild that carried a fix, so this trades currency for the cooldown the window asks for.
+
 ## `RENOVATE_X_SQLITE_BUSY_TIMEOUT`
 
 Set the SQLite busy timeout in milliseconds. Defaults to `5000`.

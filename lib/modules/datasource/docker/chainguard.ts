@@ -1,39 +1,20 @@
 import { logger } from '../../../logger/index.ts';
 import { memCacheProvider } from '../../../util/http/cache/memory-http-cache-provider.ts';
 import type { Http } from '../../../util/http/index.ts';
-import type { DigestAt } from '../types.ts';
+import type { Timestamp } from '../../../util/timestamp.ts';
+import type { HistoricDigest } from '../types.ts';
 import { getAuthHeaders } from './common.ts';
 import { ChainguardTagHistory } from './schema.ts';
 import type { ChainguardTagHistoryEntry } from './types.ts';
 
-/**
- * Chainguard's OCI extension, advertised at `/v2/_oci/ext/discover`.
- *
- * A tag's history is the one thing the distribution API can't express, and
- * it's what lets `minimumReleaseAge` work here: Chainguard rebuilds every
- * supported tag whenever one of its packages changes, so the digest a tag
- * points at is nearly always newer than the window.
- */
-function historyUrl(
-  registryHost: string,
-  dockerRepository: string,
-  tag: string,
-): string {
-  return `${registryHost}/v2/${dockerRepository}/_chainguard/history/${tag}`;
-}
-
-/**
- * Every digest a tag has pointed at, oldest first; the last entry is where it
- * points now. `null` when the registry has no history for the tag, which also
- * covers a registry that doesn't serve the extension at all.
- */
+/** Every digest a tag pointed at on or before `end`, or `null` if unknown. */
 export async function getChainguardTagHistory(
   http: Http,
   registryHost: string,
   dockerRepository: string,
   tag: string,
+  end: Timestamp,
 ): Promise<ChainguardTagHistoryEntry[] | null> {
-  const url = historyUrl(registryHost, dockerRepository, tag);
   const headers = await getAuthHeaders(http, registryHost, dockerRepository);
   if (!headers) {
     logger.debug(
@@ -41,6 +22,12 @@ export async function getChainguardTagHistory(
     );
     return null;
   }
+
+  // The response is paginated. Bounded by `end` it comes back newest-first,
+  // so a truncated page drops the oldest entries; unbounded it is
+  // oldest-first, where truncation would hide the newest and make a tag that
+  // is still being rebuilt look settled.
+  const url = `${registryHost}/v2/${dockerRepository}/_chainguard/history/${tag}?end=${encodeURIComponent(end)}`;
 
   try {
     const res = await http.getJson(
@@ -50,6 +37,8 @@ export async function getChainguardTagHistory(
     );
     return res.body.history;
   } catch (err) {
+    // Anything else, including ExternalHostError, is for the caller to
+    // decide on.
     if (err.statusCode === 404) {
       return null;
     }
@@ -58,42 +47,16 @@ export async function getChainguardTagHistory(
 }
 
 /**
- * The entry the tag points at now.
- *
- * Chosen by timestamp rather than by position: the response is oldest-first
- * in practice, but a reordered response or an entry dropped by `LooseArray`
- * would otherwise date the tag older than it is, which lets an update through
- * the window early.
- */
-export function newestHistoryEntry(
-  history: ChainguardTagHistoryEntry[],
-): ChainguardTagHistoryEntry | null {
-  let best: ChainguardTagHistoryEntry | null = null;
-  for (const entry of history) {
-    if (!entry.updateTimestamp) {
-      continue;
-    }
-    if (
-      best === null ||
-      Date.parse(entry.updateTimestamp) > Date.parse(best.updateTimestamp!)
-    ) {
-      best = entry;
-    }
-  }
-  return best;
-}
-
-/**
  * The newest entry at or before `cutoff`.
  *
- * `null` means the tag has never pointed at anything old enough, so there is
- * nothing that satisfies the window to update to yet.
+ * Scans rather than indexing: the endpoint's ordering depends on how it was
+ * queried, and an entry dropped by `LooseArray` would shift a fixed position.
  */
-export function rewindTagHistory(
+export function newestEntryAtOrBefore(
   history: ChainguardTagHistoryEntry[],
   cutoff: number,
-): DigestAt | null {
-  let best: DigestAt | null = null;
+): HistoricDigest | null {
+  let best: HistoricDigest | null = null;
   for (const entry of history) {
     // Drop undatable entries: we can't prove they sit outside the window.
     if (!entry.updateTimestamp) {

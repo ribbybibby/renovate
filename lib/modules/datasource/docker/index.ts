@@ -12,6 +12,7 @@ import type { HttpResponse } from '../../../util/http/types.ts';
 import { hasKey } from '../../../util/object.ts';
 import { type AsyncResult, Result } from '../../../util/result.ts';
 import { isDockerDigest } from '../../../util/string-match.ts';
+import type { Timestamp } from '../../../util/timestamp.ts';
 import { asTimestamp } from '../../../util/timestamp.ts';
 import {
   ensurePathPrefix,
@@ -22,10 +23,10 @@ import {
 import { id as dockerVersioningId } from '../../versioning/docker/index.ts';
 import { Datasource } from '../datasource.ts';
 import type {
-  DigestAt,
   DigestAtConfig,
   DigestConfig,
   GetReleasesConfig,
+  HistoricDigest,
   PostprocessReleaseConfig,
   PostprocessReleaseResult,
   Release,
@@ -38,8 +39,7 @@ import {
 } from '../util.ts';
 import {
   getChainguardTagHistory,
-  newestHistoryEntry,
-  rewindTagHistory,
+  newestEntryAtOrBefore,
 } from './chainguard.ts';
 import {
   CHAINGUARD_REGISTRY,
@@ -71,7 +71,6 @@ import {
   QuayTagsResponse,
   RegistryTagsList,
 } from './schema.ts';
-import type { ChainguardTagHistoryEntry } from './types.ts';
 
 const defaultConfig = {
   commitMessageTopic: '{{{depName}}} Docker tag',
@@ -1341,7 +1340,7 @@ export class DockerDatasource extends Datasource {
     );
   }
 
-  /** Resolves the `cgr.dev` repository for a release, or `null`. */
+  /** The `cgr.dev` repository for a release, or `null` for other registries. */
   private chainguardRepository(config: {
     packageName: string;
     registryUrl: string | null;
@@ -1360,73 +1359,68 @@ export class DockerDatasource extends Datasource {
    * Dates a `cgr.dev` release from the digest its tag points at now.
    *
    * The distribution API reports no timestamp for a tag, so without this
-   * `minimumReleaseAge` can't apply to `cgr.dev` at all.
+   * `minimumReleaseAge` cannot apply to `cgr.dev` at all.
    */
   override async postprocessRelease(
     config: PostprocessReleaseConfig,
     release: Release,
   ): Promise<PostprocessReleaseResult> {
-    const dockerRepository = this.chainguardRepository(config);
-    if (!dockerRepository) {
-      return release;
-    }
-
-    const history = await this.chainguardHistory(dockerRepository, release);
-    const current = history && newestHistoryEntry(history);
-    if (!current?.updateTimestamp) {
+    const now = asTimestamp(Date.now())!;
+    const current = await this.chainguardDigestAt(config, release, now);
+    if (!current) {
       return release;
     }
     // The digest is left to `getDigest()`, which resolves it arch-aware.
-    return { ...release, releaseTimestamp: current.updateTimestamp };
+    return { ...release, releaseTimestamp: current.releaseTimestamp };
   }
 
   /**
    * The digest a `cgr.dev` tag pointed at on or before `before`.
    *
    * Chainguard rebuilds every supported tag whenever one of its packages
-   * changes, so a tag's current digest is nearly always newer than a
-   * `minimumReleaseAge` window and the update could never satisfy it. The
-   * digest the tag pointed at when the window opened has, which is what makes
-   * the update possible — so long as that digest is what gets written.
+   * changes, so the current digest is nearly always newer than a
+   * `minimumReleaseAge` window and the update could never satisfy it.
    */
-  override async getDigestAt(
+  override getDigestAt(
     config: DigestAtConfig,
     newValue: string,
-    before: number,
-  ): Promise<DigestAt | null> {
+    before: Timestamp,
+  ): Promise<HistoricDigest | null> {
+    return this.chainguardDigestAt(config, { version: newValue }, before);
+  }
+
+  private async chainguardDigestAt(
+    config: DigestAtConfig,
+    release: Pick<Release, 'version' | 'versionOrig'>,
+    before: Timestamp,
+  ): Promise<HistoricDigest | null> {
     const dockerRepository = this.chainguardRepository(config);
     if (!dockerRepository) {
       return null;
     }
 
-    const history = await this.chainguardHistory(dockerRepository, {
-      version: newValue,
-    });
-    if (!history?.length) {
-      return null;
-    }
-    return rewindTagHistory(history, before);
-  }
-
-  private async chainguardHistory(
-    dockerRepository: string,
-    release: Pick<Release, 'version' | 'versionOrig'>,
-  ): Promise<ChainguardTagHistoryEntry[] | null> {
+    let history;
     try {
-      return await getChainguardTagHistory(
+      history = await getChainguardTagHistory(
         this.http,
         CHAINGUARD_REGISTRY,
         dockerRepository,
         // `versionCompatibility`/`extractVersion` rewrite `version`, so this
         // is the only field that still holds the registry's tag.
         release.versionOrig ?? release.version,
+        before,
       );
     } catch (err) {
+      if (err instanceof ExternalHostError) {
+        throw err;
+      }
       logger.debug(
         { err, dockerRepository, version: release.version },
         'Chainguard: tag history lookup failed',
       );
       return null;
     }
+
+    return history ? newestEntryAtOrBefore(history, Date.parse(before)) : null;
   }
 }

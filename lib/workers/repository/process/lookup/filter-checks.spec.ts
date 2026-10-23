@@ -547,4 +547,107 @@ describe('workers/repository/process/lookup/filter-checks', () => {
       expect(config).toEqual({ minimumReleaseAge: '1 day' });
     });
   });
+
+  describe('.filterInternalChecks() digest rewinding', () => {
+    const historic = {
+      digest: 'sha256:settled',
+      releaseTimestamp: '2021-01-02T00:00:00.000Z' as Timestamp,
+    };
+
+    class RewindingDatasource extends DummyDatasource {
+      calls = 0;
+      readonly result: typeof historic | null;
+
+      constructor(result: typeof historic | null) {
+        super();
+        this.result = result;
+      }
+
+      override getDigestAt(): Promise<typeof historic | null> {
+        this.calls += 1;
+        return Promise.resolve(this.result);
+      }
+    }
+
+    beforeEach(() => {
+      vi.stubEnv('RENOVATE_X_REWIND_DIGESTS', 'true');
+      config.datasource = 'some-datasource';
+      config.packageName = 'some-package';
+      config.internalChecksFilter = 'strict';
+      config.minimumReleaseAge = '5 days';
+      config.pinDigests = true;
+    });
+
+    it('rewinds a pending release to the digest that satisfies the window', async () => {
+      const ds = new RewindingDatasource(historic);
+      getDatasourceFor.mockReturnValue(ds);
+
+      const { release, pendingChecks } = await filterInternalChecks(
+        config,
+        versioning,
+        'patch',
+        sortedReleases,
+      );
+
+      expect(ds.calls).toBe(1);
+      expect(pendingChecks).toBeFalse();
+      expect(release).toMatchObject({
+        version: '1.0.4',
+        newDigest: 'sha256:settled',
+        releaseTimestamp: '2021-01-02T00:00:00.000Z',
+      });
+    });
+
+    it('falls through to an older release when nothing is old enough', async () => {
+      const ds = new RewindingDatasource(null);
+      getDatasourceFor.mockReturnValue(ds);
+
+      const { release } = await filterInternalChecks(
+        config,
+        versioning,
+        'patch',
+        sortedReleases,
+      );
+
+      expect(ds.calls).toBe(1);
+      expect(release?.version).toBe('1.0.3');
+      expect(release?.newDigest).toBeUndefined();
+    });
+
+    it('does not rewind when the digest will not be written', async () => {
+      // A bare tag keeps resolving to current content, so an older
+      // timestamp would describe a digest the user never pulls.
+      config.pinDigests = false;
+      const ds = new RewindingDatasource(historic);
+      getDatasourceFor.mockReturnValue(ds);
+
+      const { release } = await filterInternalChecks(
+        config,
+        versioning,
+        'patch',
+        sortedReleases,
+      );
+
+      expect(ds.calls).toBe(0);
+      expect(release?.version).toBe('1.0.3');
+      expect(release?.newDigest).toBeUndefined();
+    });
+
+    it('does not rewind without the opt-in', async () => {
+      vi.stubEnv('RENOVATE_X_REWIND_DIGESTS', '');
+      const ds = new RewindingDatasource(historic);
+      getDatasourceFor.mockReturnValue(ds);
+
+      const { release } = await filterInternalChecks(
+        config,
+        versioning,
+        'patch',
+        sortedReleases,
+      );
+
+      expect(ds.calls).toBe(0);
+      expect(release?.version).toBe('1.0.3');
+      expect(release?.newDigest).toBeUndefined();
+    });
+  });
 });

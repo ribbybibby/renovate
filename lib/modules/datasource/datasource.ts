@@ -9,12 +9,13 @@ import type { HttpBase } from '../../util/http/http.ts';
 import { Http, HttpError } from '../../util/http/index.ts';
 import type { HttpOptions } from '../../util/http/types.ts';
 import { coerceObject } from '../../util/object.ts';
+import type { Timestamp } from '../../util/timestamp.ts';
 import type {
   DatasourceApi,
-  DigestAt,
   DigestAtConfig,
   DigestConfig,
   GetReleasesConfig,
+  HistoricDigest,
   PostprocessReleaseConfig,
   PostprocessReleaseResult,
   RegistryStrategy,
@@ -98,8 +99,8 @@ export abstract class Datasource<
   getDigestAt?(
     config: DigestAtConfig,
     newValue: string,
-    before: number,
-  ): Promise<DigestAt | null>;
+    before: Timestamp,
+  ): Promise<HistoricDigest | null>;
 
   handleHttpErrors(_err: HttpError): void {
     // intentionally empty
