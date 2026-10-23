@@ -19,7 +19,7 @@ If you use [Harbor](https://goharbor.io/) as a proxy cache for Docker Hub, then 
 
 The OCI distribution API reports no release timestamp for a tag, so `minimumReleaseAge` normally does nothing outside Docker Hub.
 Chainguard serves a tag's history as an [OCI extension](https://github.com/opencontainers/distribution-spec/blob/main/extensions/_oci.md) at `/v2/{name}/_chainguard/history/{tag}`, which Renovate uses to date a `cgr.dev` release.
-No extra configuration is needed: the extension uses the same credentials as pulling the image, and registries which do not serve it answer `404`.
+No extra configuration is needed: the extension uses the same credentials as pulling the image.
 
 Chainguard rebuilds every supported tag whenever one of its packages changes, so the digest a tag such as `3.14` points at is nearly always only hours old, and a cooldown measured in days would never pass.
 Where Renovate writes the digest to the package file — with [`pinDigests`](../../../configuration-options.md#pindigests), or a reference which is already digest-pinned — and `RENOVATE_X_REWIND_DIGESTS` is set, it instead proposes the digest the tag pointed at when the window opened, which has been published long enough to satisfy the policy.
@@ -27,7 +27,8 @@ That means pinning a digest Chainguard has already superseded, possibly one that
 
 A bare `cgr.dev/my-org/python:3.14` resolves to whatever the tag points at when it is pulled, so there is no digest to hold it still.
 Those references are dated by the digest the tag points at now, and an update to a tag that is still being rebuilt stays pending until the tag has been unchanged for `minimumReleaseAge`.
-Pin digests if you want cooldowns to be satisfiable on `cgr.dev`.
+Pin digests, and set `RENOVATE_X_REWIND_DIGESTS`, if you want cooldowns to be satisfiable on `cgr.dev`.
+That variable is self-hosted only, so on hosted Renovate an unpinned `cgr.dev` tag under a cooldown stays pending.
 
 This is a behaviour change if you set `minimumReleaseAgeBehaviour=timestamp-optional` to work around `cgr.dev` having no timestamps: updates which previously flowed because nothing could be dated are now dated, and an unpinned tag that is still being rebuilt stays pending.
 

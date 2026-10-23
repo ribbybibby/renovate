@@ -204,8 +204,9 @@ export const DockerHubTagsPage = z.object({
 });
 
 /**
- * Response of Chainguard's `_chainguard/history/{tag}` OCI extension: every
- * digest the tag has pointed at, oldest first.
+ * Response of Chainguard's `_chainguard/history/{tag}` OCI extension: the
+ * digests a tag has pointed at. Ordering depends on the query — the `end`
+ * bound this code always sends returns newest first.
  *
  * No `.catch()` on `history`: an unreadable payload must throw so it is
  * logged as a failure, rather than passing silently as a tag with no

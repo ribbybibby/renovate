@@ -1,3 +1,4 @@
+import { ExternalHostError } from '../../types/errors/external-host-error.ts';
 import type { Timestamp } from '../../util/timestamp.ts';
 import * as _datasourceCommon from './common.ts';
 import { Datasource } from './datasource.ts';
@@ -151,8 +152,8 @@ describe('modules/datasource/digest-at', () => {
   });
 
   it('returns null when the datasource throws', async () => {
-    const ds = new PlainDatasource() as RewindingDatasource;
-    ds.getDigestAt = () => Promise.reject(new Error('boom'));
+    const ds = new RewindingDatasource();
+    vi.spyOn(ds, 'getDigestAt').mockRejectedValueOnce(new Error('boom'));
     getDatasourceFor.mockReturnValueOnce(ds);
 
     await expect(
@@ -165,11 +166,10 @@ describe('modules/datasource/digest-at', () => {
   });
 
   it('rethrows ExternalHostError so the run can abort', async () => {
-    const { ExternalHostError } =
-      await import('../../types/errors/external-host-error.ts');
-    const ds = new PlainDatasource() as RewindingDatasource;
-    ds.getDigestAt = () =>
-      Promise.reject(new ExternalHostError(new Error('down')));
+    const ds = new RewindingDatasource();
+    vi.spyOn(ds, 'getDigestAt').mockRejectedValueOnce(
+      new ExternalHostError(new Error('down')),
+    );
     getDatasourceFor.mockReturnValueOnce(ds);
 
     await expect(

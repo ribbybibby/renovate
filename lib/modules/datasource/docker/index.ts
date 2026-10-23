@@ -1366,7 +1366,13 @@ export class DockerDatasource extends Datasource {
     release: Release,
   ): Promise<PostprocessReleaseResult> {
     const now = asTimestamp(Date.now())!;
-    const current = await this.chainguardDigestAt(config, release, now);
+    const current = await this.chainguardDigestAt(
+      config,
+      // `versionCompatibility`/`extractVersion` rewrite `version`, so this is
+      // the only field that still holds the registry's tag.
+      release.versionOrig ?? release.version,
+      now,
+    );
     if (!current) {
       return release;
     }
@@ -1386,12 +1392,12 @@ export class DockerDatasource extends Datasource {
     newValue: string,
     before: Timestamp,
   ): Promise<HistoricDigest | null> {
-    return this.chainguardDigestAt(config, { version: newValue }, before);
+    return this.chainguardDigestAt(config, newValue, before);
   }
 
   private async chainguardDigestAt(
     config: DigestAtConfig,
-    release: Pick<Release, 'version' | 'versionOrig'>,
+    tag: string,
     before: Timestamp,
   ): Promise<HistoricDigest | null> {
     const dockerRepository = this.chainguardRepository(config);
@@ -1405,9 +1411,7 @@ export class DockerDatasource extends Datasource {
         this.http,
         CHAINGUARD_REGISTRY,
         dockerRepository,
-        // `versionCompatibility`/`extractVersion` rewrite `version`, so this
-        // is the only field that still holds the registry's tag.
-        release.versionOrig ?? release.version,
+        tag,
         before,
       );
     } catch (err) {
@@ -1415,7 +1419,7 @@ export class DockerDatasource extends Datasource {
         throw err;
       }
       logger.debug(
-        { err, dockerRepository, version: release.version },
+        { err, dockerRepository, tag },
         'Chainguard: tag history lookup failed',
       );
       return null;

@@ -192,7 +192,10 @@ export async function filterInternalChecks(
         ageCheck.isPending &&
         getEnv().RENOVATE_X_REWIND_DIGESTS &&
         willWriteDigest(config)
-          ? asTimestamp(Date.now() - ageCheck.minimumReleaseAgeMs)
+          ? // `null` for a window reaching before `asTimestamp`'s year-2000
+            // floor, which skips the lookup rather than asking for a cutoff
+            // no registry could answer.
+            asTimestamp(Date.now() - ageCheck.minimumReleaseAgeMs)
           : null;
       if (cutoff) {
         const digestAt = await getDigestAt(

@@ -2,12 +2,13 @@ import { logger } from '../../../logger/index.ts';
 import { memCacheProvider } from '../../../util/http/cache/memory-http-cache-provider.ts';
 import type { Http } from '../../../util/http/index.ts';
 import type { Timestamp } from '../../../util/timestamp.ts';
+import { asTimestamp } from '../../../util/timestamp.ts';
 import type { HistoricDigest } from '../types.ts';
 import { getAuthHeaders } from './common.ts';
 import { ChainguardTagHistory } from './schema.ts';
 import type { ChainguardTagHistoryEntry } from './types.ts';
 
-/** Every digest a tag pointed at on or before `end`, or `null` if unknown. */
+/** The first page of digests a tag pointed at on or before `end`. */
 export async function getChainguardTagHistory(
   http: Http,
   registryHost: string,
@@ -27,7 +28,12 @@ export async function getChainguardTagHistory(
   // so a truncated page drops the oldest entries; unbounded it is
   // oldest-first, where truncation would hide the newest and make a tag that
   // is still being rebuilt look settled.
-  const url = `${registryHost}/v2/${dockerRepository}/_chainguard/history/${tag}?end=${encodeURIComponent(end)}`;
+  //
+  // The bound is rounded up to the minute so that repeated lookups of a tag
+  // share a cache entry rather than each minting a unique URL. Rounding up
+  // only ever widens it, and callers filter against the exact instant.
+  const bound = asTimestamp(Math.ceil(Date.parse(end) / 60_000) * 60_000)!;
+  const url = `${registryHost}/v2/${dockerRepository}/_chainguard/history/${tag}?end=${encodeURIComponent(bound)}`;
 
   try {
     const res = await http.getJson(

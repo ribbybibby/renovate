@@ -1,4 +1,5 @@
 import * as httpMock from '~test/http-mock.ts';
+import * as memCache from '../../../util/cache/memory/index.ts';
 import { Http } from '../../../util/http/index.ts';
 import type { Timestamp } from '../../../util/timestamp.ts';
 import {
@@ -8,7 +9,9 @@ import {
 import { CHAINGUARD_REGISTRY } from './common.ts';
 
 const http = new Http('docker');
-const end = '2026-06-20T00:00:00.000Z' as Timestamp;
+const end = '2026-06-20T00:00:30.500Z' as Timestamp;
+// Rounded up to the minute so repeated lookups share a cache entry.
+const bound = '2026-06-20T00:01:00.000Z';
 
 function ts(value: string): Timestamp {
   return value as Timestamp;
@@ -20,7 +23,7 @@ function scope() {
     .get('/v2/')
     .reply(200, '', {})
     .get('/v2/my-org/python/_chainguard/history/3.14')
-    .query({ end });
+    .query({ end: bound });
 }
 
 function fetch(): Promise<unknown> {
@@ -34,6 +37,10 @@ function fetch(): Promise<unknown> {
 }
 
 describe('modules/datasource/docker/chainguard', () => {
+  beforeEach(() => {
+    memCache.init();
+  });
+
   describe('getChainguardTagHistory', () => {
     it('returns the history for a tag, bounded by end', async () => {
       scope().reply(200, {
@@ -51,6 +58,14 @@ describe('modules/datasource/docker/chainguard', () => {
       // The endpoint sends `null`, not `[]`, when there are no rows.
       scope().reply(200, { history: null });
 
+      await expect(fetch()).resolves.toEqual([]);
+    });
+
+    it('reuses one request for repeated lookups within the minute', async () => {
+      scope().reply(200, { history: [] });
+
+      // Only one mock: a second unique URL would fail as an unmocked request.
+      await expect(fetch()).resolves.toEqual([]);
       await expect(fetch()).resolves.toEqual([]);
     });
 
