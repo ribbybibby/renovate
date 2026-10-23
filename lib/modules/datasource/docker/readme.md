@@ -26,32 +26,39 @@ The update Renovate raises for `3.14` is therefore a digest which has been publi
 
 A rewound release is pinned to the digest the tag pointed at, which for a multi-architecture repository is the image index rather than an architecture-specific manifest.
 
+Rewinding means pinning a digest that Chainguard has already superseded, which may include a rebuild that carried a CVE fix.
+That is the trade `minimumReleaseAge` asks for, but it is worth stating plainly for a registry whose whole purpose is shipping patched images.
+
+A rewound release is pinned to the digest the tag pointed at, which for a multi-architecture repository is the image index rather than an architecture-specific manifest.
+
 To use this, give Renovate a token for the platform API:
 
-```js
-module.exports = {
-  hostRules: [
+```json
+{
+  "hostRules": [
     {
-      // pulling the images
-      matchHost: 'cgr.dev',
-      username: '<your-pull-username>',
-      password: '<your-pull-token>',
+      "hostType": "docker",
+      "matchHost": "cgr.dev",
+      "username": "<your-pull-username>",
+      "password": "<your-pull-token>"
     },
     {
-      // reading tags and tag history
-      matchHost: 'console-api.enforce.dev',
-      token: '<your-chainguard-token>',
-    },
-  ],
-};
+      "hostType": "docker",
+      "matchHost": "console-api.enforce.dev",
+      "token": "<your-chainguard-token>"
+    }
+  ]
+}
 ```
 
-Mint the token with [`chainctl`](https://edu.chainguard.dev/chainguard/chainguard-enforce/chainctl-docs/), using an [assumable identity](https://edu.chainguard.dev/chainguard/administration/assumable-ids/) for unattended runs:
+Renovate only queries the platform API when the second rule is present; without it `cgr.dev` is read over the distribution API as before, and `minimumReleaseAge` does not apply.
+The API rejects anonymous requests, so there is nothing to be gained by trying.
+
+Mint the token with [`chainctl`](https://edu.chainguard.dev/chainguard/chainguard-enforce/chainctl-docs/):
 
 ```bash
 chainctl auth token --audience https://console-api.enforce.dev
 ```
 
-The token only needs to be able to read the organization's registry, and it is short-lived, so it must be refreshed on the schedule Renovate runs on.
-
-Set `RENOVATE_X_CHAINGUARD_TAGS_DISABLE` to skip the platform API and read tags from `cgr.dev` over the distribution API as before.
+The token needs to read both IAM groups and the registry, because a `cgr.dev` path is resolved group by group before its tags can be listed.
+It is short-lived and must be refreshed before each run, so an [assumable identity](https://edu.chainguard.dev/chainguard/administration/assumable-ids/) is the only practical option for unattended use.

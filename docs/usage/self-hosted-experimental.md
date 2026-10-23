@@ -23,12 +23,6 @@ For more information see [the OpenTelemetry docs](opentelemetry.md).
 
 If set to any value, Renovate will always paginate requests to GitHub fully, instead of stopping after 10 pages.
 
-## `RENOVATE_X_CHAINGUARD_TAGS_DISABLE`
-
-If set to any value, Renovate will stop using the Chainguard platform API (`https://console-api.enforce.dev`) to fetch tags and tag history for images pulled from `https://cgr.dev`, and use the normal Docker API instead.
-
-Tags fetched from the Docker API carry no release timestamp, so `minimumReleaseAge` will not apply to `cgr.dev` images while this is set.
-
 ## `RENOVATE_X_DOCKER_HUB_DISABLE_LABEL_LOOKUP`
 
 If set to any value, Renovate will skip attempting to get release labels (e.g. gitRef, sourceUrl) from manifest annotations for `https://index.docker.io`.

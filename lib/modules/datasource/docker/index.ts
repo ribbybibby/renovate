@@ -25,6 +25,8 @@ import { Datasource } from '../datasource.ts';
 import type {
   DigestConfig,
   GetReleasesConfig,
+  PostprocessReleaseConfig,
+  PostprocessReleaseResult,
   Release,
   ReleaseResult,
 } from '../types.ts';
@@ -33,8 +35,14 @@ import {
   isCrossOriginPaginationAllowed,
   resolvePaginationUrl,
 } from '../util.ts';
-import { CHAINGUARD_REGISTRY, getChainguardReleases } from './chainguard.ts';
 import {
+  chainguardTagsAsReleases,
+  getChainguardTags as getChainguardTagList,
+  isChainguardEnabled,
+  rewindChainguardTag,
+} from './chainguard.ts';
+import {
+  CHAINGUARD_REGISTRY,
   DOCKER_HUB,
   dockerDatasourceId,
   extractDigestFromResponseBody,
@@ -101,7 +109,7 @@ export class DockerDatasource extends Datasource {
 
   override readonly releaseTimestampSupport = true;
   override readonly releaseTimestampNote =
-    'Only supported on Docker Hub and Chainguard (`cgr.dev`). On Docker Hub the release timestamp is determined from the `tag_last_pushed` field in the results. **NOTE**: Currently, digests will receive the same release timestamp as the `tag_last_pushed`, which means that digests may appear newer than they are - see https://github.com/renovatebot/renovate/issues/38659. On `cgr.dev` it comes from the Chainguard platform API, and a `minimumReleaseAge` window rewinds each tag to the digest it pointed at when the window opened.';
+    'Only supported on Docker Hub, where the release timestamp is determined from the `tag_last_pushed` field in the results, and on `cgr.dev`, which queries the Chainguard platform API. **NOTE**: Currently, digests will receive the same release timestamp as the `tag_last_pushed`, which means that digests may appear newer than they are - see https://github.com/renovatebot/renovate/issues/38659';
   override readonly sourceUrlSupport = 'package';
   override readonly sourceUrlNote =
     'The source URL is determined from the `org.opencontainers.image.source` and `org.label-schema.vcs-url` labels present in the metadata of the **latest stable** image found on the Docker registry.';
@@ -769,7 +777,7 @@ export class DockerDatasource extends Datasource {
     const hostsNeedingAllPages = [
       'https://ghcr.io', // GHCR sorts from oldest to newest, so we need to get all pages
       'https://quay.io', // Quay sorts from oldest to newest, so we need to get all pages
-      'https://cgr.dev', // Chainguard sorts lexically and publishes a tag per build, so current versions sort past the page limit
+      CHAINGUARD_REGISTRY, // Chainguard sorts lexically and publishes a tag per build, so current versions sort past the page limit
       'https://registry.access.redhat.com', // RH catalog; Quay-style lexicographic sort, high tag counts
       'https://registry.redhat.io', // RH authenticated catalog; same backend
     ];
@@ -1265,11 +1273,19 @@ export class DockerDatasource extends Datasource {
 
     const getChainguardTags = (): TagsResultType =>
       Result.wrapNullable(
-        getChainguardReleases(this.http, dockerRepository, {
-          minimumReleaseAgeMs: calculateMinimumReleaseAgeMs(config),
-        }),
+        getChainguardTagList(this.http, dockerRepository),
         'chainguard-error' as const,
-      ).catch(getTags);
+      )
+        .transform(chainguardTagsAsReleases)
+        .catch((err) => {
+          // Without a log line here, an expired token looks indistinguishable
+          // from a registry that simply has no release timestamps.
+          logger.once.debug(
+            { err, dockerRepository },
+            'Chainguard: platform API lookup failed, falling back to the registry API',
+          );
+          return getTags();
+        });
 
     let tagsResult: TagsResultType;
     if (
@@ -1277,10 +1293,7 @@ export class DockerDatasource extends Datasource {
       !getEnv().RENOVATE_X_DOCKER_HUB_TAGS_DISABLE
     ) {
       tagsResult = getDockerHubTags();
-    } else if (
-      registryHost === CHAINGUARD_REGISTRY &&
-      !getEnv().RENOVATE_X_CHAINGUARD_TAGS_DISABLE
-    ) {
+    } else if (isChainguardEnabled(registryHost)) {
       tagsResult = getChainguardTags();
     } else {
       tagsResult = getTags();
@@ -1341,20 +1354,79 @@ export class DockerDatasource extends Datasource {
     return withCache(
       {
         namespace: 'datasource-docker-releases-v2',
-        // `cgr.dev` releases are resolved against the `minimumReleaseAge`
-        // window, so two deps sharing a repository but not a window must not
-        // share a cache entry.
-        key: buildCacheKey(
-          registryHost,
-          dockerRepository,
-          registryHost === CHAINGUARD_REGISTRY
-            ? String(calculateMinimumReleaseAgeMs(config))
-            : undefined,
-        ),
+        key: buildCacheKey(registryHost, dockerRepository),
         cacheable: registryHost === DOCKER_HUB,
         fallback: true,
       },
       () => this._getReleases(config),
     );
+  }
+
+  /**
+   * Rewinds a `cgr.dev` release to the state it was in when the
+   * `minimumReleaseAge` window opened.
+   *
+   * Chainguard rebuilds every supported tag whenever one of its packages
+   * changes, so a tag's current digest is nearly always newer than the window
+   * and aging it would withhold the update indefinitely. Reporting the digest
+   * the tag pointed at when the window opened, with the timestamp of that
+   * push, lets the update proceed at a digest which has satisfied the policy.
+   *
+   * Releases are left untouched when no window applies, when the tag is
+   * already settled, or when nothing in its history is old enough — the last
+   * of which leaves the caller to report it as pending, as it would for any
+   * other datasource.
+   */
+  override async postprocessRelease(
+    config: PostprocessReleaseConfig,
+    release: Release,
+  ): Promise<PostprocessReleaseResult> {
+    if (!config.registryUrl) {
+      return release;
+    }
+    const { registryHost, dockerRepository } = getRegistryRepository(
+      config.packageName,
+      config.registryUrl,
+    );
+    if (!isChainguardEnabled(registryHost)) {
+      return release;
+    }
+    const minimumReleaseAgeMs = calculateMinimumReleaseAgeMs(config);
+    if (!minimumReleaseAgeMs) {
+      return release;
+    }
+    const cutoff = Date.now() - minimumReleaseAgeMs;
+    if (
+      release.releaseTimestamp &&
+      Date.parse(release.releaseTimestamp) <= cutoff
+    ) {
+      return release;
+    }
+
+    try {
+      const rewound = await rewindChainguardTag(
+        this.http,
+        dockerRepository,
+        release.version,
+        cutoff,
+      );
+      if (!rewound) {
+        return release;
+      }
+      return {
+        ...release,
+        releaseTimestamp: rewound.releaseTimestamp,
+        newDigest: rewound.digest,
+      };
+    } catch (err) {
+      // Leaving the release as-is keeps the age check honest: it ages against
+      // the current, too-fresh timestamp and holds the update, rather than
+      // letting it through unaged.
+      logger.once.debug(
+        { err, dockerRepository, version: release.version },
+        'Chainguard: tag history lookup failed, leaving the release unrewound',
+      );
+      return release;
+    }
   }
 }

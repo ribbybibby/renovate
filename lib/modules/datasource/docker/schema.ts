@@ -6,6 +6,7 @@ import {
   LooseArray,
   Nullish,
 } from '../../../util/schema-utils/index.ts';
+import { MaybeTimestamp } from '../../../util/timestamp.ts';
 
 // OCI manifests
 
@@ -208,11 +209,16 @@ export const DockerHubTagsPage = z.object({
  */
 const ChainguardResource = z.object({
   id: z.string(),
-  name: z.string(),
 });
 
+/**
+ * None of these use `.catch()` on `items`: a payload we can't read has to be
+ * distinguishable from a repository that genuinely has no tags, so that the
+ * caller falls back to the distribution API instead of reporting zero
+ * releases. `LooseArray` still drops individual malformed entries.
+ */
 export const ChainguardGroupList = z.object({
-  items: LooseArray(ChainguardResource).catch([]),
+  items: LooseArray(ChainguardResource),
 });
 
 export const ChainguardRepoList = ChainguardGroupList;
@@ -220,37 +226,40 @@ export const ChainguardRepoList = ChainguardGroupList;
 export const ChainguardTagList = z.object({
   items: LooseArray(
     ChainguardResource.extend({
-      digest: z.string().nullable().catch(null),
-      lastUpdated: z.string().datetime().nullable().catch(null),
+      name: z.string(),
+      lastUpdated: MaybeTimestamp,
     }),
     {
-      /* v8 ignore next -- TODO: add test */
       onError: ({ error }) => {
         logger.debug(
           { err: error },
-          'Chainguard: Failed to parse some tags from the platform API',
+          'Chainguard: failed to parse some tags from the platform API',
         );
       },
     },
-  ).catch([]),
+  ),
 });
-export type ChainguardTagList = z.infer<typeof ChainguardTagList>;
 
 /**
- * One previous iteration of a mutable tag. Chainguard rebuilds a tag such as
- * `3.14` on every package change, so the digest it points at now is usually
- * newer than any `minimumReleaseAge` window; the history is what lets us
- * resolve the digest it pointed at when the window opened.
+ * One previous iteration of a mutable tag — the digest it used to point at,
+ * and when it stopped.
  */
 export const ChainguardTagHistory = z.object({
   items: LooseArray(
     z.object({
       digest: z.string(),
-      updateTimestamp: z.string().datetime().nullable().catch(null),
+      updateTimestamp: MaybeTimestamp,
     }),
-  ).catch([]),
+    {
+      onError: ({ error }) => {
+        logger.debug(
+          { err: error },
+          'Chainguard: failed to parse some tag history from the platform API',
+        );
+      },
+    },
+  ),
 });
-export type ChainguardTagHistory = z.infer<typeof ChainguardTagHistory>;
 
 /**
  * Docker registry auth token response.

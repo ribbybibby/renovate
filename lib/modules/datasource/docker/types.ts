@@ -1,3 +1,4 @@
+import type { Timestamp } from '../../../util/timestamp.ts';
 import type { DockerHubTag } from './schema.ts';
 
 export interface DockerHubCacheData {
@@ -10,11 +11,16 @@ export interface RegistryRepository {
   dockerRepository: string;
 }
 
-export interface ChainguardReleasesOptions {
-  apiUrl?: string;
-  /**
-   * The `minimumReleaseAge` window, in milliseconds, that the result has to
-   * satisfy. Zero disables the tag history walk entirely.
-   */
-  minimumReleaseAgeMs?: number;
+/** The state a rewound tag was in when the `minimumReleaseAge` window opened. */
+export interface RewoundTag {
+  digest: string;
+  releaseTimestamp: Timestamp;
+}
+
+/** A tag as the Chainguard platform API reports it. */
+export interface ChainguardTag {
+  /** UIDP, used to address the tag's history. */
+  id: string;
+  name: string;
+  lastUpdated: Timestamp | null;
 }

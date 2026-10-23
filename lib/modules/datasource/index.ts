@@ -73,8 +73,6 @@ function toGetReleasesConfig(
     constraints,
     constraintsVersioning,
     constraintsFiltering,
-    minimumReleaseAge,
-    minimumReleaseAgeBuffer,
   } = config;
   return {
     customDatasources,
@@ -85,8 +83,6 @@ function toGetReleasesConfig(
     constraints,
     constraintsVersioning,
     constraintsFiltering,
-    minimumReleaseAge,
-    minimumReleaseAgeBuffer,
   };
 }
 

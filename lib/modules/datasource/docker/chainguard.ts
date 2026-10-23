@@ -1,18 +1,16 @@
 import { logger } from '../../../logger/index.ts';
+import * as hostRules from '../../../util/host-rules.ts';
+import { memCacheProvider } from '../../../util/http/cache/memory-http-cache-provider.ts';
 import type { Http } from '../../../util/http/index.ts';
-import * as p from '../../../util/promises.ts';
-import type { Timestamp } from '../../../util/timestamp.ts';
-import { asTimestamp } from '../../../util/timestamp.ts';
 import type { Release } from '../types.ts';
+import { CHAINGUARD_REGISTRY, dockerDatasourceId } from './common.ts';
 import {
   ChainguardGroupList,
   ChainguardRepoList,
   ChainguardTagHistory,
   ChainguardTagList,
 } from './schema.ts';
-import type { ChainguardReleasesOptions } from './types.ts';
-
-export const CHAINGUARD_REGISTRY = 'https://cgr.dev';
+import type { ChainguardTag, RewoundTag } from './types.ts';
 
 /**
  * Chainguard's control plane. Tags and tag history come from here rather than
@@ -21,14 +19,32 @@ export const CHAINGUARD_REGISTRY = 'https://cgr.dev';
  */
 export const CHAINGUARD_API = 'https://console-api.enforce.dev';
 
-/** Cap on concurrent tag-history lookups for a single repository. */
-const historyConcurrency = 16;
+/**
+ * Responses are memoised for the run: `getReleases()` and every subsequent
+ * `postprocessRelease()`/`getDigest()` call for the same repository resolve
+ * the same group, repo and tag list.
+ */
+const httpOptions = { cacheProvider: memCacheProvider };
 
-interface ChainguardTag {
-  id: string;
-  name: string;
-  digest: string | null;
-  lastUpdated: Timestamp | null;
+/** Thrown when the platform API returns something we can't read. */
+export class ChainguardApiError extends Error {}
+
+/**
+ * Whether to resolve this registry through the Chainguard platform API.
+ *
+ * Gated on credentials rather than a feature flag: the platform API answers
+ * 401 to anonymous callers, so without this every lookup of a public
+ * `cgr.dev/chainguard/*` image would make a request that cannot succeed.
+ */
+export function isChainguardEnabled(registryHost: string): boolean {
+  if (registryHost !== CHAINGUARD_REGISTRY) {
+    return false;
+  }
+  const { token, username, password } = hostRules.find({
+    hostType: dockerDatasourceId,
+    url: CHAINGUARD_API,
+  });
+  return !!token || !!(username && password);
 }
 
 /**
@@ -38,18 +54,17 @@ interface ChainguardTag {
  * the repository, and anything between the two is a subgroup — which is how
  * chart repositories such as `charts/nginx` are laid out. Each level needs its
  * own lookup because a UIDP is opaque and can't be derived from the name.
+ *
+ * Returns `null` when any level is genuinely absent, as opposed to throwing,
+ * which signals that the API could not be read.
  */
 async function resolveRepoId(
   http: Http,
-  apiUrl: string,
   dockerRepository: string,
 ): Promise<string | null> {
   const segments = dockerRepository.split('/');
   if (segments.length < 2) {
-    logger.debug(
-      { dockerRepository },
-      'Chainguard: repository path has no group segment',
-    );
+    logger.debug(`Chainguard: no group segment in ${dockerRepository}`);
     return null;
   }
 
@@ -57,25 +72,33 @@ async function resolveRepoId(
   const repoName = rest.pop()!;
 
   const groups = await http.getJson(
-    `${apiUrl}/iam/v1/groups?name=${encodeURIComponent(groupName)}`,
+    `${CHAINGUARD_API}/iam/v1/groups?name=${encodeURIComponent(groupName)}`,
+    httpOptions,
     ChainguardGroupList,
   );
+  // The root lookup can't be scoped by parent, so an ambiguous name could
+  // otherwise resolve to a same-named group in an unrelated org.
+  if (groups.body.items.length > 1) {
+    throw new ChainguardApiError(
+      `Chainguard: group name ${groupName} matched ${groups.body.items.length} groups`,
+    );
+  }
   let parentId = groups.body.items[0]?.id;
   if (!parentId) {
-    logger.debug({ groupName }, 'Chainguard: group not found');
+    logger.debug(`Chainguard: group ${groupName} not found`);
     return null;
   }
 
   for (const subgroup of rest) {
     const subgroups = await http.getJson(
-      `${apiUrl}/iam/v1/groups?uidp.childrenOf=${parentId}&name=${encodeURIComponent(subgroup)}`,
+      `${CHAINGUARD_API}/iam/v1/groups?uidp.childrenOf=${parentId}&name=${encodeURIComponent(subgroup)}`,
+      httpOptions,
       ChainguardGroupList,
     );
     const id = subgroups.body.items[0]?.id;
     if (!id) {
       logger.debug(
-        { dockerRepository, subgroup },
-        'Chainguard: subgroup not found',
+        `Chainguard: subgroup ${subgroup} of ${dockerRepository} not found`,
       );
       return null;
     }
@@ -83,152 +106,98 @@ async function resolveRepoId(
   }
 
   const repos = await http.getJson(
-    `${apiUrl}/registry/v1/repos?uidp.childrenOf=${parentId}&name=${encodeURIComponent(repoName)}`,
+    `${CHAINGUARD_API}/registry/v1/repos?uidp.childrenOf=${parentId}&name=${encodeURIComponent(repoName)}`,
+    httpOptions,
     ChainguardRepoList,
   );
   const repoId = repos.body.items[0]?.id;
   if (!repoId) {
-    logger.debug({ dockerRepository }, 'Chainguard: repository not found');
+    logger.debug(`Chainguard: repository ${dockerRepository} not found`);
     return null;
   }
   return repoId;
 }
 
-async function listTags(
+/**
+ * Current state of every tag in the repository, or `null` if the repository
+ * isn't visible to the configured credentials.
+ */
+export async function getChainguardTags(
   http: Http,
-  apiUrl: string,
-  repoId: string,
-): Promise<ChainguardTag[]> {
+  dockerRepository: string,
+): Promise<ChainguardTag[] | null> {
+  const repoId = await resolveRepoId(http, dockerRepository);
+  if (!repoId) {
+    return null;
+  }
   const res = await http.getJson(
-    `${apiUrl}/registry/v1/tags?uidp.childrenOf=${repoId}&excludeReferrers=true`,
+    // Referrer tags (`sha256-*.sig`, `.att`, …) aren't updatable versions.
+    `${CHAINGUARD_API}/registry/v1/tags?uidp.childrenOf=${repoId}&excludeReferrers=true`,
+    httpOptions,
     ChainguardTagList,
   );
-  return res.body.items.map(({ id, name, digest, lastUpdated }) => ({
-    id,
-    name,
-    digest,
-    lastUpdated: asTimestamp(lastUpdated),
-  }));
+  return res.body.items;
 }
 
-interface RewoundTag {
-  digest: string;
-  releaseTimestamp: Timestamp;
+/** Tags as releases, carrying the timestamp the tag last moved. */
+export function chainguardTagsAsReleases(tags: ChainguardTag[]): Release[] {
+  return tags.map((tag) => {
+    const release: Release = { version: tag.name };
+    if (tag.lastUpdated) {
+      release.releaseTimestamp = tag.lastUpdated;
+    }
+    // Digest is intentionally not propagated: it's the image index digest,
+    // which would bypass arch-aware resolution in `getDigest()`.
+    return release;
+  });
 }
 
 /**
- * The digest a tag pointed at when `cutoff` passed, with the timestamp of the
- * push that put it there, or `null` if the tag didn't exist yet.
+ * The digest `tagName` pointed at when `cutoff` passed, and when it was pushed.
+ *
+ * Chainguard rebuilds every supported tag whenever one of its packages
+ * changes, so a tag's current digest is almost always newer than a
+ * `minimumReleaseAge` window. Rewinding lets an update be proposed at a digest
+ * that has been published long enough to satisfy the policy, instead of the
+ * tag being withheld until it stops being rebuilt.
+ *
+ * `null` means the tag has never pointed at anything old enough, so there is
+ * nothing to update to yet.
  */
-async function rewindTag(
+export async function rewindChainguardTag(
   http: Http,
-  apiUrl: string,
-  tag: ChainguardTag,
+  dockerRepository: string,
+  tagName: string,
   cutoff: number,
 ): Promise<RewoundTag | null> {
+  const tags = await getChainguardTags(http, dockerRepository);
+  const tag = tags?.find((t) => t.name === tagName);
+  if (!tag) {
+    return null;
+  }
+
+  // `TagHistoryFilter` also accepts an `end` bound, which would trim the
+  // response server-side; left off until it's been verified against the REST
+  // gateway, since the filtering below is what decides the answer either way.
   const res = await http.getJson(
-    `${apiUrl}/registry/v1/tags/${tag.id}/history`,
+    `${CHAINGUARD_API}/registry/v1/tags/${tag.id}/history`,
+    httpOptions,
     ChainguardTagHistory,
   );
 
   let best: RewoundTag | null = null;
   for (const entry of res.body.items) {
-    const releaseTimestamp = asTimestamp(entry.updateTimestamp);
     // Drop undatable entries: we can't prove they sit outside the window.
-    if (!releaseTimestamp) {
+    if (!entry.updateTimestamp) {
       continue;
     }
-    const ms = Date.parse(releaseTimestamp);
+    const ms = Date.parse(entry.updateTimestamp);
     if (ms > cutoff) {
       continue;
     }
     if (best === null || ms > Date.parse(best.releaseTimestamp)) {
-      best = { digest: entry.digest, releaseTimestamp };
+      best = { digest: entry.digest, releaseTimestamp: entry.updateTimestamp };
     }
   }
   return best;
-}
-
-/**
- * Tags for a `cgr.dev` repository, as releases carrying a `releaseTimestamp`.
- *
- * Chainguard rebuilds every supported tag whenever one of its packages
- * changes, so a tag's current digest is almost always newer than a
- * `minimumReleaseAge` window — taking `lastUpdated` at face value would hold
- * every update indefinitely. When a window is configured, a tag that is too
- * fresh is instead rewound to the digest it pointed at when the window opened,
- * so the update Renovate proposes is one that has been published long enough
- * to satisfy the policy.
- *
- * A rewound release carries its historical digest as `newDigest`, because
- * `getDigest()` can only ever resolve the tag's current digest. That digest is
- * the one the tag pointed at, so for a multi-arch repository it is the image
- * index rather than an architecture-specific manifest.
- */
-export async function getChainguardReleases(
-  http: Http,
-  dockerRepository: string,
-  opts: ChainguardReleasesOptions = {},
-): Promise<Release[] | null> {
-  const apiUrl = opts.apiUrl ?? CHAINGUARD_API;
-  const minimumReleaseAgeMs = opts.minimumReleaseAgeMs ?? 0;
-
-  const repoId = await resolveRepoId(http, apiUrl, dockerRepository);
-  if (!repoId) {
-    return null;
-  }
-
-  const tags = await listTags(http, apiUrl, repoId);
-
-  if (!minimumReleaseAgeMs) {
-    return tags.map((tag) => {
-      const release: Release = { version: tag.name };
-      if (tag.lastUpdated) {
-        release.releaseTimestamp = tag.lastUpdated;
-      }
-      // Digest is intentionally not propagated here: it's the image index
-      // digest, which would bypass arch-aware resolution in `getDigest()`.
-      return release;
-    });
-  }
-
-  const cutoff = Date.now() - minimumReleaseAgeMs;
-
-  // Indexed by tag so the result keeps the order the API returned, whichever
-  // tags needed a history walk.
-  const slots: (Release | null)[] = tags.map(() => null);
-  const fresh: number[] = [];
-
-  tags.forEach((tag, i) => {
-    if (!tag.lastUpdated) {
-      // Without a timestamp we can't show the tag satisfies the window.
-      return;
-    }
-    if (Date.parse(tag.lastUpdated) <= cutoff) {
-      slots[i] = { version: tag.name, releaseTimestamp: tag.lastUpdated };
-      return;
-    }
-    fresh.push(i);
-  });
-
-  await p.map(
-    fresh,
-    async (i) => {
-      const tag = tags[i];
-      const entry = await rewindTag(http, apiUrl, tag, cutoff);
-      if (!entry) {
-        // The tag is newer than the window all the way back to its first
-        // push, so there is nothing old enough to update to yet.
-        return;
-      }
-      slots[i] = {
-        version: tag.name,
-        releaseTimestamp: entry.releaseTimestamp,
-        newDigest: entry.digest,
-      };
-    },
-    { concurrency: historyConcurrency },
-  );
-
-  return slots.filter((release) => release !== null);
 }

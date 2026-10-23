@@ -337,7 +337,8 @@ The below is a non-exhaustive list of public registries which support release ti
 | `crate`              | `https://crates.io`                                | ✅        |                                                                  |
 | `rubygems`           | `https://rubygems.org`                             | ✅        |                                                                  |
 | `docker`             | `https://index.docker.io`                          | ✅        |                                                                  |
-| `docker`             | (not Docker Hub)                                   | ❌        | [Issue](https://github.com/renovatebot/renovate/issues/38656)    |
+| `docker`             | `https://cgr.dev`                                  | ✅        | Queries `console-api.enforce.dev`; rewinds rebuilt tags          |
+| `docker`             | (not Docker Hub or `cgr.dev`)                      | ❌        | [Issue](https://github.com/renovatebot/renovate/issues/38656)    |
 | `docker`             | `https://ghcr.io`                                  | ❌        | [Issue](https://github.com/renovatebot/renovate/issues/39064)    |
 | `docker`             | `https://quay.io`                                  | ❌        | [Issue](https://github.com/renovatebot/renovate/issues/38572)    |
 | `github-releases`    | `https://github.com`                               | ✅        |                                                                  |

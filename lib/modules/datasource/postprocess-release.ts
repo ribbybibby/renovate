@@ -47,7 +47,12 @@ export async function postprocessRelease(
 
   try {
     const result = await ds.postprocessRelease(
-      { packageName, registryUrl },
+      {
+        packageName,
+        registryUrl,
+        minimumReleaseAge: config.minimumReleaseAge,
+        minimumReleaseAgeBuffer: config.minimumReleaseAgeBuffer,
+      },
       release,
     );
 
