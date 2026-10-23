@@ -1393,8 +1393,14 @@ export class DockerDatasource extends Datasource {
     const minimumReleaseAgeMs = calculateMinimumReleaseAgeMs(config);
     const cutoff = Date.now() - minimumReleaseAgeMs;
 
+    // Rewinding is only honest when the digest is written alongside it.
+    // A bare `:3.14` resolves to whatever the tag points at when it's pulled,
+    // so dating it by an older digest would promise an age the pulled image
+    // won't have. Report the current digest's age instead and let the tag
+    // age normally — it passes once the tag has been stable for the window.
     const entry =
       !minimumReleaseAgeMs ||
+      config.willWriteDigest !== true ||
       (current.updateTimestamp && Date.parse(current.updateTimestamp) <= cutoff)
         ? current
         : rewindTagHistory(history, cutoff);

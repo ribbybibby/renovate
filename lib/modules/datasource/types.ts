@@ -152,6 +152,12 @@ export interface PostprocessReleaseConfig {
    */
   minimumReleaseAge?: string | null;
   minimumReleaseAgeBuffer?: string | null;
+  /**
+   * Whether a digest reported alongside the release will be written to the
+   * package file. When it won't, the reference stays mutable, so a release
+   * can only honestly be dated by what it resolves to now.
+   */
+  willWriteDigest?: boolean;
 }
 
 export type PostprocessReleaseResult = Release | 'reject';

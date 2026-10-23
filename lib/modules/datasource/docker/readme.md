@@ -24,6 +24,11 @@ Chainguard rebuilds every supported tag whenever one of its packages changes, so
 Ageing that timestamp against a window of days would hold every update forever, so when `minimumReleaseAge` is set Renovate takes the digest the tag pointed at when the window opened and proposes _that_.
 The update Renovate raises for `3.14` is therefore a digest which has been published for at least `minimumReleaseAge`, rather than being withheld until the tag stops being rebuilt.
 
+Rewinding only happens where the digest is written to the package file, so it needs [`pinDigests`](../../../configuration-options.md#pindigests) or a reference which is already digest-pinned.
+A bare `cgr.dev/my-org/python:3.14` resolves to whatever the tag points at when it is pulled, so there is no digest to hold it still and no honest way to claim it is older than it is.
+Those references are dated by the digest the tag points at now, which means an update to a tag that is still being rebuilt stays pending until the tag has been unchanged for `minimumReleaseAge`.
+If you want cooldowns to be satisfiable on `cgr.dev`, pin digests.
+
 Rewinding means pinning a digest that Chainguard has already superseded, which may include a rebuild that carried a CVE fix.
 That is the trade `minimumReleaseAge` asks for, but it is worth stating plainly for a registry whose purpose is shipping patched images.
 

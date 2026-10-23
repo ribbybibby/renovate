@@ -3830,6 +3830,7 @@ describe('modules/datasource/docker/index', () => {
       packageName: 'cgr.dev/my-org/python',
       registryUrl: 'https://cgr.dev',
       minimumReleaseAge: '7 days',
+      willWriteDigest: true,
     };
     const release = {
       version: '3.14',
@@ -3891,6 +3892,28 @@ describe('modules/datasource/docker/index', () => {
       });
     });
 
+    it('does not rewind when the digest will not be written', async () => {
+      mockHistory([
+        {
+          digest: 'sha256:settled',
+          updateTimestamp: '2026-06-11T00:00:00.000Z',
+        },
+        { digest: 'sha256:fresh', updateTimestamp: '2026-06-19T23:00:00.000Z' },
+      ]);
+
+      // A bare `:3.14` pulls whatever the tag points at, so it is dated by
+      // the current digest and held until the tag itself settles.
+      await expect(
+        datasource.postprocessRelease(
+          { ...config, willWriteDigest: false },
+          release,
+        ),
+      ).resolves.toEqual({
+        version: '3.14',
+        releaseTimestamp: '2026-06-19T23:00:00.000Z',
+      });
+    });
+
     it('dates the tag from its current digest when no window applies', async () => {
       mockHistory([
         { digest: 'sha256:fresh', updateTimestamp: '2026-06-19T23:00:00.000Z' },
@@ -3898,7 +3921,11 @@ describe('modules/datasource/docker/index', () => {
 
       await expect(
         datasource.postprocessRelease(
-          { packageName: config.packageName, registryUrl: config.registryUrl },
+          {
+            packageName: config.packageName,
+            registryUrl: config.registryUrl,
+            willWriteDigest: true,
+          },
           release,
         ),
       ).resolves.toEqual({

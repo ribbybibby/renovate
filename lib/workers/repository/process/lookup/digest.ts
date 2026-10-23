@@ -10,6 +10,7 @@ import type { LookupUpdate } from '../../../../modules/manager/types.ts';
 import { checkMinimumReleaseAge } from '../../../../util/minimum-release-age.ts';
 import type { Timestamp } from '../../../../util/timestamp.ts';
 import { withoutUrlCredentials } from '../../../../util/url.ts';
+import { willWriteDigest } from './digest-pinning.ts';
 import {
   missingReleaseTimestampWarning,
   resolveUpdateTypeConfig,
@@ -226,10 +227,7 @@ export async function resolveUpdateDigests(
 ): Promise<void> {
   for (const update of res.updates) {
     // only update the digest in the package file if it's managed by us
-    if (
-      (config.pinDigests === true && !config.digestManagedExternally) ||
-      config.currentDigest
-    ) {
+    if (willWriteDigest(config)) {
       await resolveUpdateDigest(config, res, dependency, update);
     } else {
       delete update.newDigest;
