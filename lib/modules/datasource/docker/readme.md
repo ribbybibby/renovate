@@ -30,9 +30,9 @@ Those references are dated by the digest the tag points at now, and an update to
 Pin digests, and set `RENOVATE_X_REWIND_DIGESTS`, if you want cooldowns to be satisfiable on `cgr.dev`.
 That variable is self-hosted only, so on hosted Renovate an unpinned `cgr.dev` tag under a cooldown stays pending.
 
-This is a behaviour change if you set `minimumReleaseAgeBehaviour=timestamp-optional` to work around `cgr.dev` having no timestamps: updates which previously flowed because nothing could be dated are now dated, and an unpinned tag that is still being rebuilt stays pending.
+`minimumReleaseAgeBehaviour=timestamp-optional` does not help here, because it only applies where a release cannot be dated at all.
 
 A rewound digest is the one the tag pointed at, which for a multi-architecture repository is the image index rather than an architecture-specific manifest — so an existing architecture-specific pin becomes an index pin.
 
 The timestamp is when the tag was last rebuilt, not when its version was first published, which is the same conflation [#38659](https://github.com/renovatebot/renovate/issues/38659) tracks for Docker Hub but far more visible here.
-It reaches `currentVersionAgeInDays` and [`matchCurrentAge`](../../../configuration-options.md#packagerulesmatchcurrentage) too: a `cgr.dev` dependency previously had no timestamp, so `matchCurrentAge` never matched it, and now reports the age of the last rebuild however long the version itself has been in use.
+The same timestamp reaches `currentVersionAgeInDays` and [`matchCurrentAge`](../../../configuration-options.md#packagerulesmatchcurrentage), so a `cgr.dev` dependency reads as newly released whenever its tag was last rebuilt, however long the version has been in use.
